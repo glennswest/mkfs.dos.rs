@@ -21,3 +21,13 @@
   across every FAT, follow chains with loop detection, read directories
 - **feat:** `fsck` — four passes (boot sector, FATs, directory tree,
   allocation), with repairs recorded rather than assumed
+- **feat:** `mkfs-fat` and `fsck-fat` binaries, with dosfstools' flags and exit
+  codes
+- **feat:** `examples/mkimage.rs` — build an image from the command line
+- **test:** `tests/verify-on-linux.sh` — fsck.fat, mount, write, unmount, fsck
+  again on a real kernel; all eleven configurations pass
+- **fix:** the checker no longer reports a directory as cross-linked with
+  itself, and no longer reads the dots of `.` and `..` as bad name bytes
+- **feat:** the checker validates `.` and `..` — where they point and where they
+  sit
+- **docs:** README and work plan

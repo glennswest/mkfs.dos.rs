@@ -367,36 +367,31 @@ async fn pass3_directories<D: BlockDevice>(
     fat: &[u8],
 ) -> Result<HashMap<u32, String>> {
     let mut owners: HashMap<u32, String> = HashMap::new();
-    // Directories still to visit: path, and the cluster it starts at (`None`
-    // for the fixed root).
-    let mut queue: Vec<(String, Option<u32>)> = vec![("/".to_string(), None)];
+    // Directories still to visit: path, the cluster it starts at (`None` for
+    // the fixed root), and the cluster its parent starts at — which is what
+    // ".." has to agree with.
+    let mut queue: Vec<(String, Option<u32>, u32)> = vec![("/".to_string(), None, 0)];
     let mut seen_dirs: Vec<u32> = Vec::new();
 
-    while let Some((path, start)) = queue.pop() {
+    while let Some((path, start, parent_cluster)) = queue.pop() {
         report.directories += 1;
         let is_root = path == "/";
 
-        if let Some(cluster) = start {
-            claim_chain(
-                fs,
-                fat,
-                report,
-                &mut owners,
-                cluster,
-                &path,
-                3,
-            );
-        } else if fs.fat_type() == FatType::Fat32 {
-            claim_chain(
-                fs,
-                fat,
-                report,
-                &mut owners,
-                fs.boot().root_cluster,
-                &path,
-                3,
-            );
-        }
+        // A directory's own chain is claimed here, when it is visited, and
+        // never in its parent. Claiming it in both places would report every
+        // directory on the volume as cross-linked with itself.
+        let own_cluster = match start {
+            Some(cluster) => {
+                claim_chain(fs, fat, report, &mut owners, cluster, &path, 3);
+                cluster
+            }
+            None if fs.fat_type() == FatType::Fat32 => {
+                let root = fs.boot().root_cluster;
+                claim_chain(fs, fat, report, &mut owners, root, &path, 3);
+                root
+            }
+            None => 0,
+        };
 
         let data = match fs.read_directory(start).await {
             Ok(d) => d,
@@ -444,6 +439,45 @@ async fn pass3_directories<D: BlockDevice>(
             };
             let is_dot = name == "." || name == "..";
 
+            if is_dot {
+                // "." and ".." are the only names allowed to contain a dot in
+                // the name field, and the only entries allowed to name cluster
+                // zero. What they must get right is where they point: "." at
+                // the directory itself, ".." at its parent — and at zero when
+                // that parent is the root, whatever cluster the root occupies.
+                let (want, which) = if name == "." {
+                    (own_cluster, "itself")
+                } else {
+                    (parent_cluster, "its parent")
+                };
+                let got = entry.first_cluster();
+                if got != want && !(name == ".." && want == 0 && got == 0) {
+                    report.note(
+                        3,
+                        "bad-dot-entry",
+                        Severity::Serious,
+                        format!("{path} has '{name}' pointing at cluster {got}; {which} is at {want}"),
+                    );
+                }
+                if is_root {
+                    report.note(
+                        3,
+                        "dot-in-root",
+                        Severity::Serious,
+                        format!("the root directory has a '{name}' entry, which belongs only in a subdirectory"),
+                    );
+                }
+                if slot_index > 1 {
+                    report.note(
+                        3,
+                        "dot-out-of-place",
+                        Severity::Serious,
+                        format!("{path} has '{name}' in slot {slot_index}; it belongs in slot {}", if name == "." { 0 } else { 1 }),
+                    );
+                }
+                continue;
+            }
+
             if let Some(bad) = invalid_name_byte(&entry.name) {
                 report.note(
                     3,
@@ -469,12 +503,6 @@ async fn pass3_directories<D: BlockDevice>(
                     write_entry(fs, start, offset - DIR_ENTRY_LEN, &fixed).await?;
                     report.problems[idx].fixed = true;
                 }
-            }
-
-            if is_dot {
-                // "." and ".." are the only entries allowed to name cluster 0,
-                // and ".." does when its parent is the root directory.
-                continue;
             }
 
             if cluster == 0 {
@@ -512,8 +540,6 @@ async fn pass3_directories<D: BlockDevice>(
                 continue;
             }
 
-            let claimed = claim_chain(fs, fat, report, &mut owners, cluster, &child, 3);
-
             if is_dir {
                 if seen_dirs.contains(&cluster) {
                     report.note(
@@ -524,9 +550,10 @@ async fn pass3_directories<D: BlockDevice>(
                     );
                 } else {
                     seen_dirs.push(cluster);
-                    queue.push((child.clone(), Some(cluster)));
+                    queue.push((child.clone(), Some(cluster), cluster_for_dotdot(fs, own_cluster, is_root)));
                 }
             } else {
+                let claimed = claim_chain(fs, fat, report, &mut owners, cluster, &child, 3);
                 report.files += 1;
                 let capacity = claimed as u64 * fs.cluster_size() as u64;
                 let lowest = capacity.saturating_sub(fs.cluster_size() as u64);
@@ -651,6 +678,19 @@ async fn pass4_allocation<D: BlockDevice>(
     }
 
     Ok(())
+}
+
+/// What a child directory's ".." should hold.
+///
+/// Zero when the parent is the root, on every width — including FAT32, where
+/// the root is an ordinary chain with a cluster number of its own that ".."
+/// still does not use.
+fn cluster_for_dotdot<D: BlockDevice>(_fs: &Filesystem<D>, own_cluster: u32, is_root: bool) -> u32 {
+    if is_root {
+        0
+    } else {
+        own_cluster
+    }
 }
 
 /// Walk a chain, recording who owns each cluster and reporting a cluster that

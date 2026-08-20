@@ -54,21 +54,38 @@ to find out why it is there.
 
 ## Work plan
 
-- [ ] Scaffold the crate, licences, changelog, CI-less test layout
-- [ ] `device` — async `BlockDevice` trait, file / memory implementations
-- [ ] `structs` — boot sector (BPB + FAT32 EBPB), FSInfo, 8.3 dir entry, LFN
-- [ ] `params` — `mkfs.fat` options, defaults, volume label validation
-- [ ] `layout` — the cluster-size / FAT-length search from `setup_tables()`,
+- [x] Scaffold the crate, licences, changelog, CI-less test layout
+- [x] `device` — async `BlockDevice` trait, file / memory implementations
+- [x] `structs` — boot sector (BPB + FAT32 EBPB), FSInfo, 8.3 dir entry, LFN
+- [x] `params` — `mkfs.fat` options, defaults, volume label validation
+- [x] `layout` — the cluster-size / FAT-length search from `setup_tables()`,
       the 4085 / 65525 cluster thresholds, alignment
-- [ ] `format` — the formatter
-- [ ] Golden references captured from real `mkfs.fat --invariant`; byte-exact
-      comparison across FAT12, FAT16 and FAT32
-- [ ] `fs` — the read layer (boot sector, FAT chains, directories)
-- [ ] `fsck` — chain validation, cross-links, lost clusters, FSInfo
-- [ ] CLI binaries `mkfs-fat`, `fsck-fat`
-- [ ] `tests/verify-on-linux.sh` — fsck.fat, mount, write, unmount, fsck.fat on
-      a real kernel
+- [x] `format` — the formatter
+- [x] Golden references captured from real `mkfs.fat --invariant`; byte-exact
+      across twelve configurations, FAT12 through FAT32
+- [x] `fs` — the read layer (boot sector, FAT chains, directories)
+- [x] `fsck` — chain validation, cross-links, lost clusters, FSInfo
+- [x] CLI binaries `mkfs-fat`, `fsck-fat`
+- [x] `tests/verify-on-linux.sh` — fsck.fat, mount, write, unmount, fsck.fat on
+      a real kernel. All eleven configurations pass.
 - [ ] `../fio.dos.rs` — async userspace read/write into the image, no kernel
+- [ ] Bad block list (`-c`, `-l`), which marks clusters `0x…fff7`
+- [ ] An MBR partition table in the boot sector (`--mbr`), for a whole-disk
+      image Windows should recognise
+- [ ] exFAT is a different filesystem and is not in scope here
+
+## Verified
+
+`./tests/verify-on-linux.sh` builds images and puts them in front of a real
+Linux kernel on dev.g8.lo (Fedora 43, dosfstools 4.2). All eleven
+configurations pass every stage:
+
+    fsck.fat -n -> loop mount rw -> write -> mkdir -p -> 2 MiB write
+      -> long file name -> compare -> unmount -> fsck.fat -n -> remount
+
+The second fsck.fat is the one that counts, and our own `fsck-fat` is run over
+the image the kernel wrote to as well — which is what makes the checker's
+verdict testable against a filesystem it did not create.
 
 ## Conventions
 
