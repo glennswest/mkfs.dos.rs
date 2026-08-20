@@ -84,5 +84,5 @@ pub fn field_to_string(field: &[u8]) -> String {
 /// leans on so heavily that spelling it out each time would bury the algorithm.
 #[inline]
 pub fn cdiv(a: u64, b: u64) -> u64 {
-    (a + b - 1) / b
+    a.div_ceil(b)
 }
