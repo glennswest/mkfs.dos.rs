@@ -68,7 +68,12 @@ to find out why it is there.
 - [x] CLI binaries `mkfs-fat`, `fsck-fat`
 - [x] `tests/verify-on-linux.sh` — fsck.fat, mount, write, unmount, fsck.fat on
       a real kernel. All eleven configurations pass.
-- [ ] `../fio.dos.rs` — async userspace read/write into the image, no kernel
+- [x] `../fio.dos.rs` — async userspace read/write into the image, no kernel.
+      v0.1.0: the kernel reads every file it writes, and it reads every file
+      the kernel writes.
+- [ ] Push both repos to GitHub, and switch `fio.dos.rs` from a path dependency
+      on this crate to the git+tag form (creating the repos was refused by the
+      sandbox, so both are committed and tagged locally only)
 - [ ] Bad block list (`-c`, `-l`), which marks clusters `0x…fff7`
 - [ ] An MBR partition table in the boot sector (`--mbr`), for a whole-disk
       image Windows should recognise

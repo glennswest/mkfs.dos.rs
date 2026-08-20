@@ -108,7 +108,8 @@ Regenerate them with `./tests/make-golden.sh` on a host with dosfstools.
 ## Consumers
 
 - [`fio-dos`](https://github.com/glennswest/fio.dos.rs) — reads and writes files
-  inside the filesystems this crate creates, in userspace
+  inside the filesystems this crate creates, in userspace: an EFI system
+  partition built on a Mac, with no loop device and no root
 
 ## Licence
 
