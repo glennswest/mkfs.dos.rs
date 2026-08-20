@@ -1,0 +1,61 @@
+[package]
+name = "mkfs-dos"
+version = "0.1.0"
+edition = "2021"
+authors = ["Glenn West"]
+description = "Async FAT12/FAT16/FAT32 formatter and checker in pure Rust — a from-scratch reimplementation of mkfs.fat and fsck.fat"
+repository = "https://github.com/glennswest/mkfs.dos.rs"
+license = "MIT OR Apache-2.0"
+rust-version = "1.75"
+keywords = ["fat32", "fat16", "mkfs", "filesystem", "async"]
+categories = ["filesystem", "asynchronous"]
+
+[lib]
+name = "mkfs_dos"
+path = "src/lib.rs"
+
+[dependencies]
+# Async runtime. The crate needs only these features; a consumer running a
+# full tokio is unaffected.
+tokio = { version = "1", features = ["fs", "io-util", "rt", "sync", "macros"] }
+async-trait = "0.1"
+futures = "0.3"
+
+thiserror = "2"
+bitflags = "2"
+tracing = "0.1"
+
+# CLI binaries only.
+clap = { version = "4", features = ["derive"], optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+anyhow = { version = "1", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+tempfile = "3"
+# The golden reference filesystems are stored compressed.
+flate2 = "1"
+
+[features]
+default = ["cli"]
+# The mkfs.fat / fsck.fat binaries. Library consumers turn this off.
+cli = ["dep:clap", "dep:tracing-subscriber", "dep:anyhow", "tokio/rt-multi-thread"]
+
+# Rust will not accept a "." in a crate name, so the binaries build as mkfs-fat
+# and fsck-fat. Install them as mkfs.fat and fsck.fat — that is the name
+# `mkfs -t vfat` and `fsck -t vfat` dispatch on.
+[[bin]]
+name = "mkfs-fat"
+path = "src/bin/mkfs_fat.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "fsck-fat"
+path = "src/bin/fsck_fat.rs"
+required-features = ["cli"]
+
+[profile.release]
+lto = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1.1.4", features = ["fs"] }
