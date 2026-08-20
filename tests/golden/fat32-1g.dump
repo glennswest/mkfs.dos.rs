@@ -1,0 +1,11 @@
+mkfs.fat 4.2 (2021-01-31)
+Auto-selecting FAT32 for large filesystem
+fat32-1g.img has 64 heads and 63 sectors per track,
+hidden sectors 0x0000;
+logical sector size is 512,
+using 0xf8 media descriptor, with 2097144 sectors;
+drive number 0x80;
+filesystem has 2 32-bit FATs and 8 sectors per cluster.
+FAT size is 2048 sectors, and provides 261627 clusters.
+There are 32 reserved sectors.
+Volume ID is 1234abcd, no volume label.

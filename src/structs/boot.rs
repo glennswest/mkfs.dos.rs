@@ -226,6 +226,20 @@ impl BootSector {
         sector * self.bytes_per_sector as u64
     }
 
+    /// Byte offset of the root directory's first byte.
+    ///
+    /// On FAT12/16 that is the fixed area after the last FAT; on FAT32 it is
+    /// wherever the root cluster happens to be.
+    pub fn root_dir_offset(&self) -> u64 {
+        if self.fat_type() == FatType::Fat32 {
+            self.cluster_offset(self.root_cluster)
+        } else {
+            self.sector_offset(
+                self.reserved_sectors as u64 + self.num_fats as u64 * self.fat_length() as u64,
+            )
+        }
+    }
+
     /// Byte offset of the first sector of a data cluster.
     ///
     /// Clusters are numbered from 2; 0 and 1 are the two reserved FAT entries

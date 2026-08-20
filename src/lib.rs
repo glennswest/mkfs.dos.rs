@@ -50,6 +50,8 @@
 //! | [`structs`] | byte-exact on-disk structures |
 //! | [`params`] | `mkfs.fat` options and the defaults it applies |
 //! | [`layout`] | the geometry search: cluster size, FAT length, FAT width |
+//! | [`fat`] | entry packing for all three widths |
+//! | [`format`] | the formatter |
 //! | [`error`] | [`Error`] and [`Result`] |
 
 #![deny(missing_docs)]
@@ -58,6 +60,8 @@
 pub mod bytes;
 pub mod device;
 pub mod error;
+pub mod fat;
+pub mod format;
 pub mod layout;
 pub mod params;
 pub mod structs;
@@ -65,6 +69,7 @@ pub mod structs;
 // The things a caller reaches for first, so a simple use looks simple.
 pub use device::{BlockDevice, FileDevice, MemDevice};
 pub use error::{Error, Result};
+pub use format::{format, Report};
 pub use layout::Geometry;
 pub use params::{DiskType, FatType, Params};
 pub use structs::{BootSector, DirEntry, FsInfo};
