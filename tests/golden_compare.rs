@@ -16,7 +16,7 @@
 use std::io::Read;
 use std::path::Path;
 
-use mkfs_dos::{format, MemDevice, Params};
+use mkfs_dos::{format, FatType, MemDevice, Params};
 
 /// A golden image and the parameters that should reproduce it.
 struct Case {
@@ -37,7 +37,19 @@ const CASES: &[Case] = &[
         params: || Params::new().invariant(),
     },
     Case {
-        name: "fat12-16m",
+        name: "fat12-8m",
+        size: 8 * MIB,
+        params: || Params::new().invariant(),
+    },
+    // 32 MiB would be FAT16 left to itself; `-F 12` forces the narrower entry
+    // and the search answers with 16 KiB clusters to keep the count under 4085.
+    Case {
+        name: "fat12-32m-forced",
+        size: 32 * MIB,
+        params: || Params::new().invariant().fat_type(FatType::Fat12),
+    },
+    Case {
+        name: "fat16-16m",
         size: 16 * MIB,
         params: || Params::new().invariant(),
     },

@@ -1,0 +1,11 @@
+mkfs.fat 4.2 (2021-01-31)
+fat12-32m-forced.img has 4 heads and 32 sectors per track,
+hidden sectors 0x0000;
+logical sector size is 512,
+using 0xf8 media descriptor, with 65536 sectors;
+drive number 0x80;
+filesystem has 2 12-bit FATs and 32 sectors per cluster.
+FAT size is 32 sectors, and provides 2044 clusters.
+There are 32 reserved sectors.
+Root directory contains 512 slots and uses 32 sectors.
+Volume ID is 1234abcd, no volume label.

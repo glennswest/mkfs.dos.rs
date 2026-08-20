@@ -17,3 +17,7 @@
   root directory, FAT32 FSInfo and backup boot sector
 - **test:** golden comparison against dosfstools 4.2 — ten configurations from a
   1.44 MB floppy to a 1 GiB FAT32 with 4 KiB sectors, byte for byte
+- **feat:** `fs` — the read layer: open a volume, read and write FAT entries
+  across every FAT, follow chains with loop detection, read directories
+- **feat:** `fsck` — four passes (boot sector, FATs, directory tree,
+  allocation), with repairs recorded rather than assumed

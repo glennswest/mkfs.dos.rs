@@ -52,6 +52,8 @@
 //! | [`layout`] | the geometry search: cluster size, FAT length, FAT width |
 //! | [`fat`] | entry packing for all three widths |
 //! | [`format`] | the formatter |
+//! | [`fs`] | the read layer: open a volume, follow a chain |
+//! | [`fsck`] | the checker, and the repairs it will make |
 //! | [`error`] | [`Error`] and [`Result`] |
 
 #![deny(missing_docs)]
@@ -62,6 +64,8 @@ pub mod device;
 pub mod error;
 pub mod fat;
 pub mod format;
+pub mod fs;
+pub mod fsck;
 pub mod layout;
 pub mod params;
 pub mod structs;
@@ -70,6 +74,8 @@ pub mod structs;
 pub use device::{BlockDevice, FileDevice, MemDevice};
 pub use error::{Error, Result};
 pub use format::{format, Report};
+pub use fs::Filesystem;
+pub use fsck::{check, FsckOptions, FsckReport};
 pub use layout::Geometry;
 pub use params::{DiskType, FatType, Params};
 pub use structs::{BootSector, DirEntry, FsInfo};

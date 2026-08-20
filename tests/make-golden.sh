@@ -22,7 +22,9 @@ LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)/golden"
 # name:size-kib:mkfs.fat args
 CASES=(
     "fat12-1440k:1440:"
-    "fat12-16m:16384:"
+    "fat12-8m:8192:"
+    "fat12-32m-forced:32768:-F 12"
+    "fat16-16m:16384:"
     "fat16-64m:65536:"
     "fat16-256m:262144:"
     "fat32-512m:524288:"

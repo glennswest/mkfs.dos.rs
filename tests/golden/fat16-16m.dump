@@ -1,0 +1,11 @@
+mkfs.fat 4.2 (2021-01-31)
+fat16-16m.img has 2 heads and 32 sectors per track,
+hidden sectors 0x0000;
+logical sector size is 512,
+using 0xf8 media descriptor, with 32768 sectors;
+drive number 0x80;
+filesystem has 2 16-bit FATs and 4 sectors per cluster.
+FAT size is 32 sectors, and provides 8167 clusters.
+There are 4 reserved sectors.
+Root directory contains 512 slots and uses 32 sectors.
+Volume ID is 1234abcd, no volume label.
