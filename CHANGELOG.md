@@ -40,3 +40,6 @@ leaves consistent.
 
 ## [Unreleased]
 <!-- New unreleased changes go here -->
+
+### 2026-08-20
+- **chore:** published at https://github.com/glennswest/mkfs.dos.rs
