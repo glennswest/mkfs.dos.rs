@@ -43,7 +43,7 @@ parameters, one call, always `--invariant`:
 
 ```sh
 cargo run --example mkimage -- out.img 64 fat16 label=ESP
-# size is MiB, or KiB with a k suffix (1440k); then a bare 12|16|32, noalign, fixed,
+# size is MiB, or KiB with a k suffix (1440k); then a FAT width (12|16|32, or fat12|fat16|fat32), noalign, fixed,
 # or label= sector= cluster= fats= root= reserved=
 ```
 
