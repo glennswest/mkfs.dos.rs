@@ -9,8 +9,8 @@ points where the two differ.
 - **Version:** 0.1.0 — see `Cargo.toml` (single version location)
 - **License:** MIT OR Apache-2.0
 - **Repo:** https://github.com/glennswest/mkfs.dos.rs
-- **Directory:** `~/projects/mkfs.dos.rs`. The crate covers FAT12, FAT16 and
-  FAT32 from one code path, exactly as `mkfs.fat` does.
+- **Directory:** `~/src/mkfs.dos.rs` (stormcentral session checkout). The
+  crate covers FAT12, FAT16 and FAT32 from one code path, exactly as `mkfs.fat` does.
 
 ## Why this exists
 
@@ -44,13 +44,22 @@ to find out why it is there.
 
 | Module | What it owns |
 |---|---|
-| `device` | the `BlockDevice` trait and its file / memory implementations |
-| `structs` | byte-exact on-disk structures: boot sector, FSInfo, dir entry |
+| `device` | the `BlockDevice` trait; `FileDevice` (file or block device) and `MemDevice` |
+| `bytes` | little-endian accessors for the packed on-disk format |
+| `structs` | byte-exact on-disk structures: boot sector, FSInfo, dir entry, LFN |
 | `params` | `mkfs.fat` options and the defaults it applies |
 | `layout` | the geometry search: cluster size, FAT length, FAT type |
-| `format` | the formatter |
+| `fat` | FAT entry packing for all three widths |
+| `format` | the formatter (`format`, `format_with`) |
 | `fs` | the read layer — open a volume, walk the FAT |
-| `fsck` | the checker |
+| `fsck` | the checker, four passes, exit codes as `fsck.fat` |
+| `error` | `Error` / `Result` |
+| `bin/` | `mkfs-fat`, `fsck-fat` (feature `cli`, on by default) |
+
+Ships as a library by git tag only — not on crates.io, not a stormcentral
+component (no container, port or config). The CLI flags and their divergences
+from `mkfs.fat` (`-H` for hidden sectors, `--fixed`, `--dry-run`, no `-C`) are
+tabled in README.
 
 ## Work plan
 
@@ -78,16 +87,21 @@ to find out why it is there.
 - [ ] Bad block list (`-c`, `-l`), which marks clusters `0x…fff7`
 - [ ] An MBR partition table in the boot sector (`--mbr`), for a whole-disk
       image Windows should recognise
+- [ ] #1 — make the kernel verification runnable without a local build or root
 - [ ] exFAT is a different filesystem and is not in scope here
 
 ## Verified
 
 `./tests/verify-on-linux.sh` builds images and puts them in front of a real
 Linux kernel on dev.g8.lo (Fedora 43, dosfstools 4.2). All eleven
-configurations pass every stage:
+configurations passed every stage on 2026-08-19:
 
     fsck.fat -n -> loop mount rw -> write -> mkdir -p -> 2 MiB write
       -> long file name -> compare -> unmount -> fsck.fat -n -> remount
+
+The script builds locally and logs in as `root@dev.g8.lo`, which session rules
+forbid, so it cannot be re-run as-is — see issue #1. Day to day, verify with
+`sc-build` (`cargo test`, which includes the golden comparison).
 
 The second fsck.fat is the one that counts, and our own `fsck-fat` is run over
 the image the kernel wrote to as well — which is what makes the checker's
