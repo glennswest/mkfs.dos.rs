@@ -88,6 +88,7 @@ tabled in README.
 - [ ] An MBR partition table in the boot sector (`--mbr`), for a whole-disk
       image Windows should recognise
 - [ ] #1 — make the kernel verification runnable without a local build or root
+- [x] 2026-09-27 docs audit: README / CLAUDE.md checked claim by claim against the code; only open gap is #1
 - [ ] exFAT is a different filesystem and is not in scope here
 
 ## Verified

@@ -31,6 +31,22 @@ geometry before anything is written), `check` with `FsckOptions`, and
 device; `MemDevice` formats a buffer. Library consumers who do not want the CLI
 dependencies take it with `default-features = false`.
 
+FAT writes the sector size into the boot sector, so it is not a hint.
+`FileDevice` asks the kernel for a block device's logical sector size
+(`BLKSSZGET`, Linux only) and reports 512 for a plain file; an image meant for a
+4 KiB-sector device says so with `FileDevice::with_sector_size` or
+`MemDevice::with_sector_size`, or with `Params::sector_size`, which wins over
+the device. A `BlockDevice` of your own should report its real sector size.
+
+`examples/mkimage.rs` is the smallest complete use — one device, one set of
+parameters, one call, always `--invariant`:
+
+```sh
+cargo run --example mkimage -- out.img 64 fat16 label=ESP
+# size is MiB, or KiB with a k suffix (1440k); then a bare 12|16|32, noalign, fixed,
+# or label= sector= cluster= fats= root= reserved=
+```
+
 ## Command line
 
 The `cli` feature (on by default) builds two binaries. Rust will not put a `.`
