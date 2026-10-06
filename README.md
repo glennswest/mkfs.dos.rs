@@ -184,7 +184,9 @@ Regenerate them with `./tests/make-golden.sh` on a host with dosfstools.
 
 A library, taken by git tag (`v0.1.0` is the only release). It is not on
 crates.io and is not a stormcentral component: there is no container, service,
-port or configuration file. Consumers pin a tag in `Cargo.toml`, as above.
+port or configuration file. Consumers pin it in `Cargo.toml` — by tag, as
+above, or by commit: `fio-dos` pins `rev = "a55c537…"`, the `v0.1.0` tag's
+commit, and bumps it deliberately when this crate's library changes.
 
 ## Consumers
 

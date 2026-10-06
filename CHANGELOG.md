@@ -41,6 +41,9 @@ leaves consistent.
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
+### 2026-10-06
+- **docs:** fio.dos.rs pins this crate by commit (`rev = a55c537`, v0.1.0's), not by tag, and has no `[patch]` (fio.dos.rs#3): CLAUDE.md and README's "How it ships" say so; CLAUDE.md adds the rule that a library change here is followed by an issue on fio.dos.rs asking for the rev bump (#2, #3)
+
 ### 2026-09-28
 - **docs:** third audit since 2026-09-18 (still doc-only commits in that range; no code change since v0.1.0): README's flag table, defaults, `fsck-fat` flags and exit codes, `mkimage` options, public exports, golden cases and the `v0.1.0` tag on the remote all match the code. No `docs/` directory, no config, ports or APIs beyond the library; no new doc/code gaps beyond #1
 

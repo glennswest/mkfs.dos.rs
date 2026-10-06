@@ -80,10 +80,12 @@ tabled in README.
 - [x] `../fio.dos.rs` — async userspace read/write into the image, no kernel.
       v0.1.0: the kernel reads every file it writes, and it reads every file
       the kernel writes.
-- [x] Both repos pushed; `fio.dos.rs` takes this crate by git tag, verified by
-      building a throwaway crate that takes `fio-dos` by git — the local
-      checkout building proves nothing, since its `[patch]` hides a path
-      dependency that a consumer cannot resolve
+- [x] Both repos pushed; `fio.dos.rs` takes this crate by git, pinned to a
+      commit — `rev = a55c537`, the `v0.1.0` tag's commit — with no `[patch]`
+      to a sibling checkout (fio.dos.rs#3). Consumer resolution was verified
+      by building a throwaway crate that takes `fio-dos` by git
+- [x] #2, #3 — docs say fio.dos.rs pins a rev, not a tag, and when to ask for
+      a bump (2026-10-06)
 - [ ] Bad block list (`-c`, `-l`), which marks clusters `0x…fff7`
 - [ ] An MBR partition table in the boot sector (`--mbr`), for a whole-disk
       image Windows should recognise
@@ -115,3 +117,8 @@ verdict testable against a filesystem it did not create.
 - No `unsafe`. Structures are encoded field by field in little-endian, never by
   casting a repr(C) struct over a buffer.
 - Nothing in this crate reads or writes a path outside the device it was given.
+- **A library change needs a rev bump downstream.** fio.dos.rs pins this
+  crate to a commit and bumps it only deliberately. When a change here alters
+  the library (API, on-disk behaviour, a fix fio-dos should pick up), push it,
+  then file an issue on glennswest/fio.dos.rs asking for the `rev` bump (it
+  goes in its own commit there). Docs-only commits need none.
