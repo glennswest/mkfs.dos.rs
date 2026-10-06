@@ -89,7 +89,12 @@ tabled in README.
 - [ ] Bad block list (`-c`, `-l`), which marks clusters `0x…fff7`
 - [ ] An MBR partition table in the boot sector (`--mbr`), for a whole-disk
       image Windows should recognise
-- [ ] #1 — make the kernel verification runnable without a local build or root
+- [ ] #1 — make the kernel verification runnable without a local build or root.
+      In progress (2026-10-06): `verify-on-linux.sh` runs where it is invoked
+      (`sc-build tests/verify-on-linux.sh` on dev, unprivileged): build images,
+      `fsck.fat -n`, an mtools write if mtools is there, `fsck.fat -n` and our
+      `fsck-fat` again; the kernel loop-mount stage runs only as root (a
+      privileged test container), and is skipped, loudly, otherwise
 - [x] 2026-09-27 docs audit (twice), re-audited 2026-09-28: README / CLAUDE.md checked claim by claim against the code; only open gap is #1
 - [ ] exFAT is a different filesystem and is not in scope here
 
