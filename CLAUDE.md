@@ -89,31 +89,37 @@ tabled in README.
 - [ ] Bad block list (`-c`, `-l`), which marks clusters `0x…fff7`
 - [ ] An MBR partition table in the boot sector (`--mbr`), for a whole-disk
       image Windows should recognise
-- [ ] #1 — make the kernel verification runnable without a local build or root.
-      In progress (2026-10-06): `verify-on-linux.sh` runs where it is invoked
-      (`sc-build tests/verify-on-linux.sh` on dev, unprivileged): build images,
-      `fsck.fat -n`, an mtools write if mtools is there, `fsck.fat -n` and our
-      `fsck-fat` again; the kernel loop-mount stage runs only as root (a
-      privileged test container), and is skipped, loudly, otherwise
-- [x] 2026-09-27 docs audit (twice), re-audited 2026-09-28: README / CLAUDE.md checked claim by claim against the code; only open gap is #1
+- [x] #1 — kernel verification runnable without a local build or root
+      (2026-10-06): `verify-on-linux.sh` runs where invoked, and
+      `sc-build tests/verify-on-linux.sh` runs fsck.fat + an mtools write +
+      our fsck-fat unprivileged on dev; the loop-mount stage runs only as root
+- [ ] #4 — where the kernel loop-mount stage runs now (needs-owner: a
+      privileged `mkfs-dos-test` container, or a manual root-only check)
+- [x] 2026-09-27 docs audit (twice), re-audited 2026-09-28: README / CLAUDE.md checked claim by claim against the code; only open gap was #1 (closed 2026-10-06)
 - [ ] exFAT is a different filesystem and is not in scope here
 
 ## Verified
 
-`./tests/verify-on-linux.sh` builds images and puts them in front of a real
-Linux kernel on dev.g8.lo (Fedora 43, dosfstools 4.2). All eleven
-configurations passed every stage on 2026-08-19:
+`tests/verify-on-linux.sh` runs on the machine it is invoked on — no ssh, no
+root login. Day to day:
 
-    fsck.fat -n -> loop mount rw -> write -> mkdir -p -> 2 MiB write
-      -> long file name -> compare -> unmount -> fsck.fat -n -> remount
+    sc-build tests/verify-on-linux.sh
 
-The script builds locally and logs in as `root@dev.g8.lo`, which session rules
-forbid, so it cannot be re-run as-is — see issue #1. Day to day, verify with
-`sc-build` (`cargo test`, which includes the golden comparison).
+builds eleven images on dev and runs, per image, as the unprivileged build user:
 
-The second fsck.fat is the one that counts, and our own `fsck-fat` is run over
-the image the kernel wrote to as well — which is what makes the checker's
-verdict testable against a filesystem it did not create.
+    fsck.fat -n + fsck-fat -> mtools: mmd, mcopy 2 MiB x2 + long file name
+      -> read back, compare -> fsck.fat -n + fsck-fat
+
+All eleven configurations passed on 2026-10-06 (99 checks; dosfstools 4.2,
+mtools 4.0.49). The kernel stage (loop mount rw -> write -> mkdir -p -> long
+name -> compare -> unmount -> fsck.fat -n -> remount) runs only as root and is
+reported `SKIP` otherwise; it last ran, all eleven passing, on 2026-08-19.
+Where it should run now is #4 (needs-owner). `cargo test` (plain `sc-build`)
+covers the golden comparison.
+
+The fsck.fat after a write is the one that counts, and our own `fsck-fat` is
+run over the image the other implementation wrote to as well — which is what
+makes the checker's verdict testable against a filesystem it did not create.
 
 ## Conventions
 

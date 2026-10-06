@@ -133,30 +133,38 @@ and the details are where implementations diverge:
 
 ## Verified
 
-`./tests/verify-on-linux.sh [user@host]` builds images with the `mkimage`
-example, ships them to a Linux host (default `root@dev.g8.lo`; loop mounting
-needs root there) and runs
-each one through `fsck.fat -n` → loop mount read-write → write → unmount →
-`fsck.fat -n` → remount and read back. **All eleven configurations pass every
-stage** — FAT12, FAT16 and FAT32, one FAT and two, aligned and not, 512-byte and
-4 KiB sectors, from a 1.44 MB floppy to a 1 GiB volume:
+`tests/verify-on-linux.sh` builds eleven images with the `mkimage` example —
+FAT12, FAT16 and FAT32, one FAT and two, aligned and not, 512-byte and 4 KiB
+sectors, from a 1.44 MB floppy to a 1 GiB volume — and puts each one in front
+of FAT implementations that are not ours, on the machine it runs on:
+
+| Stage | What runs | Needs |
+|---|---|---|
+| 1. fresh image | `fsck.fat -n`, then our `fsck-fat` | dosfstools |
+| 2. mtools write | `mmd` nested directories, `mcopy` a file, 2 MiB twice and a long file name, read all back and compare, then `fsck.fat -n` and our `fsck-fat` | mtools |
+| 3. kernel write | loop mount read-write, `mkdir -p`, write, copy, long file name, compare, unmount, `fsck.fat -n`, our `fsck-fat`, remount and read back | root |
+
+The day-to-day run is on the build box, unprivileged:
 
 ```
-fsck.fat -n -> mount rw -> write -> mkdir -p -> 2 MiB write -> long file name
-  -> compare -> unmount -> fsck.fat -n -> remount -> read back
+sc-build tests/verify-on-linux.sh
 ```
 
-The second `fsck.fat` is the one that counts. "Mounts read-write" and "is
-writable" are different claims, and only a completed write proves the second.
+There it runs stages 1 and 2 and reports stage 3 as `SKIP` — never as a pass.
+**All eleven configurations pass stages 1 and 2** (dev.g8.lo, Fedora 43,
+dosfstools 4.2, mtools 4.0.49, 2026-10-06). Run as root (a privileged
+container, or a Linux machine of your own) it runs stage 3 as well;
+`--require-mount` makes a skipped kernel stage a failure, and
+`--require-mtools` does the same for a missing mtools. The kernel stage last
+ran on 2026-08-19, when all eleven configurations passed it; running it
+somewhere a session may reach is
+[#4](https://github.com/glennswest/mkfs.dos.rs/issues/4).
 
-Our own `fsck-fat` is then run over the image the kernel wrote to, and has to
-agree that it is clean — which makes the checker's verdict testable against a
-filesystem it did not create.
-
-The script builds with `cargo` on the machine that runs it and logs in to the
-remote host as root, so it is a manual check, not part of `cargo test`; the recorded pass is from
-2026-08-19. Moving it onto the unprivileged build path is
-[#1](https://github.com/glennswest/mkfs.dos.rs/issues/1).
+The `fsck.fat` after a write is the one that counts. "Mounts read-write" and
+"is writable" are different claims, and only a completed write proves the
+second. Our own `fsck-fat` is then run over the image the other implementation
+wrote to, and has to agree that it is clean — which makes the checker's verdict
+testable against a filesystem it did not create.
 
 ## Tests
 

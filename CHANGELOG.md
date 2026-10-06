@@ -42,6 +42,8 @@ leaves consistent.
 <!-- New unreleased changes go here -->
 
 ### 2026-10-06
+- **test:** `tests/verify-on-linux.sh` no longer builds on the invoking machine and ships images to `root@dev.g8.lo`: it runs where it is invoked, so `sc-build tests/verify-on-linux.sh` runs it on the build box, unprivileged. Per image: `fsck.fat -n` and our `fsck-fat` on the fresh image; a new mtools stage (nested `mmd`, `mcopy` of a file, 2 MiB twice and a long file name, read back and compare) followed by `fsck.fat -n` and our `fsck-fat`; and the kernel loop-mount stage, now run only as root and reported `SKIP` otherwise. `--require-mount` / `--require-mtools` turn a skip into a failure. All eleven configurations pass stages 1 and 2 on dev (#1); where the kernel stage runs now is #4
+- **docs:** README and CLAUDE.md "Verified" describe the three stages, the `sc-build` invocation and the 2026-10-06 result (#1)
 - **docs:** fio.dos.rs pins this crate by commit (`rev = a55c537`, v0.1.0's), not by tag, and has no `[patch]` (fio.dos.rs#3): CLAUDE.md and README's "How it ships" say so; CLAUDE.md adds the rule that a library change here is followed by an issue on fio.dos.rs asking for the rev bump (#2, #3)
 
 ### 2026-09-28
