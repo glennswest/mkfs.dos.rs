@@ -41,6 +41,9 @@ leaves consistent.
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
+### 2026-10-10
+- **docs:** refresh since 2026-10-02 (the only code change is `tests/verify-on-linux.sh`, #1): README and CLAUDE.md say `sc-build tests/verify-on-linux.sh` runs on a fresh build VM (dev.g8.lo is retired), that the 1.44 MB floppy case writes 400 KiB twice rather than 2 MiB, and that the 2026-10-06 pass was on dev and has not yet repeated on the build-VM image. CLI flags, defaults, exit codes, `mkimage` options and "How it ships" (library by git tag/rev; no container, port, config or API) re-checked — unchanged, no `docs/` directory, no new doc/code gaps
+
 ### 2026-10-06
 - **test:** `tests/verify-on-linux.sh` no longer builds on the invoking machine and ships images to `root@dev.g8.lo`: it runs where it is invoked, so `sc-build tests/verify-on-linux.sh` runs it on the build box, unprivileged. Per image: `fsck.fat -n` and our `fsck-fat` on the fresh image; a new mtools stage (nested `mmd`, `mcopy` of a file, 2 MiB twice and a long file name, read back and compare) followed by `fsck.fat -n` and our `fsck-fat`; and the kernel loop-mount stage, now run only as root and reported `SKIP` otherwise. `--require-mount` / `--require-mtools` turn a skip into a failure. All eleven configurations pass stages 1 and 2 on dev (#1); where the kernel stage runs now is #4
 - **docs:** README and CLAUDE.md "Verified" describe the three stages, the `sc-build` invocation and the 2026-10-06 result (#1)

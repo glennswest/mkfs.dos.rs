@@ -153,7 +153,9 @@ sc-build tests/verify-on-linux.sh
 
 There it runs stages 1 and 2 and reports stage 3 as `SKIP` — never as a pass.
 **All eleven configurations pass stages 1 and 2** (dev.g8.lo, Fedora 43,
-dosfstools 4.2, mtools 4.0.49, 2026-10-06). Run as root (a privileged
+dosfstools 4.2, mtools 4.0.49, 2026-10-06 — before dev was retired; it has
+not yet run on the build-VM image, which needs dosfstools, or the script stops,
+and mtools, or stage 2 is `SKIP`). Run as root (a privileged
 container, or a Linux machine of your own) it runs stage 3 as well;
 `--require-mount` makes a skipped kernel stage a failure, and
 `--require-mtools` does the same for a missing mtools. The kernel stage last

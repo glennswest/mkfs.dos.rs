@@ -96,6 +96,7 @@ tabled in README.
 - [ ] #4 — where the kernel loop-mount stage runs now (needs-owner: a
       privileged `mkfs-dos-test` container, or a manual root-only check)
 - [x] 2026-09-27 docs audit (twice), re-audited 2026-09-28: README / CLAUDE.md checked claim by claim against the code; only open gap was #1 (closed 2026-10-06)
+- [x] 2026-10-10 docs refresh since 2026-10-02 (only code change: `verify-on-linux.sh`): build VM, not dev; floppy write size; no new doc/code gaps
 - [ ] exFAT is a different filesystem and is not in scope here
 
 ## Verified
@@ -112,8 +113,9 @@ build user:
     fsck.fat -n + fsck-fat -> mtools: mmd, mcopy 2 MiB x2 (400 KiB on the floppy) + long file name
       -> read back, compare -> fsck.fat -n + fsck-fat
 
-All eleven configurations passed on 2026-10-06 (99 checks; dosfstools 4.2,
-mtools 4.0.49). The kernel stage (loop mount rw -> write -> mkdir -p -> long
+All eleven configurations passed on 2026-10-06 on dev (99 checks; dosfstools 4.2,
+mtools 4.0.49). Not yet run on the build-VM image: a 2026-10-10 attempt
+waited 30 min behind ~20 builds and was cancelled. The kernel stage (loop mount rw -> write -> mkdir -p -> long
 name -> compare -> unmount -> fsck.fat -n -> remount) runs only as root and is
 reported `SKIP` otherwise; it last ran, all eleven passing, on 2026-08-19.
 Where it should run now is #4 (needs-owner). `cargo test` (plain `sc-build`)
