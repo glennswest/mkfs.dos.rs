@@ -92,7 +92,7 @@ tabled in README.
 - [x] #1 — kernel verification runnable without a local build or root
       (2026-10-06): `verify-on-linux.sh` runs where invoked, and
       `sc-build tests/verify-on-linux.sh` runs fsck.fat + an mtools write +
-      our fsck-fat unprivileged on dev; the loop-mount stage runs only as root
+      our fsck-fat unprivileged on the build box; the loop-mount stage runs only as root
 - [ ] #4 — where the kernel loop-mount stage runs now (needs-owner: a
       privileged `mkfs-dos-test` container, or a manual root-only check)
 - [x] 2026-09-27 docs audit (twice), re-audited 2026-09-28: README / CLAUDE.md checked claim by claim against the code; only open gap was #1 (closed 2026-10-06)
@@ -105,9 +105,11 @@ root login. Day to day:
 
     sc-build tests/verify-on-linux.sh
 
-builds eleven images on dev and runs, per image, as the unprivileged build user:
+builds eleven images on a fresh build VM (dev.g8.lo is retired; sc-build makes
+a VM per job and destroys it after) and runs, per image, as the unprivileged
+build user:
 
-    fsck.fat -n + fsck-fat -> mtools: mmd, mcopy 2 MiB x2 + long file name
+    fsck.fat -n + fsck-fat -> mtools: mmd, mcopy 2 MiB x2 (400 KiB on the floppy) + long file name
       -> read back, compare -> fsck.fat -n + fsck-fat
 
 All eleven configurations passed on 2026-10-06 (99 checks; dosfstools 4.2,

@@ -141,10 +141,11 @@ of FAT implementations that are not ours, on the machine it runs on:
 | Stage | What runs | Needs |
 |---|---|---|
 | 1. fresh image | `fsck.fat -n`, then our `fsck-fat` | dosfstools |
-| 2. mtools write | `mmd` nested directories, `mcopy` a file, 2 MiB twice and a long file name, read all back and compare, then `fsck.fat -n` and our `fsck-fat` | mtools |
+| 2. mtools write | `mmd` nested directories, `mcopy` a file, 2 MiB twice (400 KiB on the 1.44 MB floppy, which cannot hold 4 MiB) and a long file name, read all back and compare, then `fsck.fat -n` and our `fsck-fat` | mtools |
 | 3. kernel write | loop mount read-write, `mkdir -p`, write, copy, long file name, compare, unmount, `fsck.fat -n`, our `fsck-fat`, remount and read back | root |
 
-The day-to-day run is on the build box, unprivileged:
+The day-to-day run is through `sc-build`, on a fresh build VM made for the job
+and destroyed after it, as the unprivileged build user:
 
 ```
 sc-build tests/verify-on-linux.sh
