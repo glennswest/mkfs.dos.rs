@@ -17,8 +17,10 @@
 #   sc-build tests/verify-on-linux.sh
 #
 # Stage 3 needs a loop device, which means root: it runs when the script runs
-# as root (a privileged test container, or a Linux machine of your own) and is
-# skipped otherwise — reported as SKIP, never as a pass.
+# as root and is skipped otherwise — reported as SKIP, never as a pass. Its
+# regular home is not root anywhere but a throwaway VM (#4, owner 2026-10-06):
+# tests/vm/ builds a kernel + busybox image whose init runs this same stage
+# over the same eleven configurations, booted by `stormcentral testhost boot`.
 #
 #   tests/verify-on-linux.sh [--require-mount]
 #
