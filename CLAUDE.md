@@ -102,6 +102,7 @@ tabled in README.
       (`SC_BUILD_OUT`), boot 9a33e8fc2b on nanatest1 passed all eleven
 - [x] 2026-09-27 docs audit (twice), re-audited 2026-09-28: README / CLAUDE.md checked claim by claim against the code; only open gap was #1 (closed 2026-10-06)
 - [x] 2026-10-10 docs refresh since 2026-10-02 (only code change: `verify-on-linux.sh`): build VM, not dev; floppy write size; no new doc/code gaps
+- [x] 2026-11-07 docs refresh since 2026-10-16 (only `tests/vm/` added; docs already cover it): no new doc/code gaps
 - [ ] exFAT is a different filesystem and is not in scope here
 
 ## Verified
