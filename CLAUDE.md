@@ -93,8 +93,13 @@ tabled in README.
       (2026-10-06): `verify-on-linux.sh` runs where invoked, and
       `sc-build tests/verify-on-linux.sh` runs fsck.fat + an mtools write +
       our fsck-fat unprivileged on the build box; the loop-mount stage runs only as root
-- [ ] #4 — where the kernel loop-mount stage runs now (needs-owner: a
-      privileged `mkfs-dos-test` container, or a manual root-only check)
+- [ ] #4 — the kernel loop-mount stage runs in a throwaway VM through
+      `stormcentral testhost boot` (owner, 2026-10-06; not a container, not a
+      manual root check). IN PROGRESS (2026-11-07): `tests/vm/build-image.sh`
+      + `tests/vm/init.sh`, after fio.dos.rs's `tests/vm/`: kernel + busybox
+      UEFI disk, init runs the kernel stage over the eleven mkimage cases and
+      prints `VERIFY PASS` / `VERIFY FAIL <why>`; built by sc-build
+      (`SC_BUILD_OUT`), booted on nanatest1
 - [x] 2026-09-27 docs audit (twice), re-audited 2026-09-28: README / CLAUDE.md checked claim by claim against the code; only open gap was #1 (closed 2026-10-06)
 - [x] 2026-10-10 docs refresh since 2026-10-02 (only code change: `verify-on-linux.sh`): build VM, not dev; floppy write size; no new doc/code gaps
 - [ ] exFAT is a different filesystem and is not in scope here
