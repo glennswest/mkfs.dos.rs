@@ -93,13 +93,13 @@ tabled in README.
       (2026-10-06): `verify-on-linux.sh` runs where invoked, and
       `sc-build tests/verify-on-linux.sh` runs fsck.fat + an mtools write +
       our fsck-fat unprivileged on the build box; the loop-mount stage runs only as root
-- [ ] #4 — the kernel loop-mount stage runs in a throwaway VM through
+- [x] #4 — the kernel loop-mount stage runs in a throwaway VM through
       `stormcentral testhost boot` (owner, 2026-10-06; not a container, not a
-      manual root check). IN PROGRESS (2026-11-07): `tests/vm/build-image.sh`
+      manual root check). DONE (2026-11-07): `tests/vm/build-image.sh`
       + `tests/vm/init.sh`, after fio.dos.rs's `tests/vm/`: kernel + busybox
       UEFI disk, init runs the kernel stage over the eleven mkimage cases and
       prints `VERIFY PASS` / `VERIFY FAIL <why>`; built by sc-build
-      (`SC_BUILD_OUT`), booted on nanatest1
+      (`SC_BUILD_OUT`), boot 9a33e8fc2b on nanatest1 passed all eleven
 - [x] 2026-09-27 docs audit (twice), re-audited 2026-09-28: README / CLAUDE.md checked claim by claim against the code; only open gap was #1 (closed 2026-10-06)
 - [x] 2026-10-10 docs refresh since 2026-10-02 (only code change: `verify-on-linux.sh`): build VM, not dev; floppy write size; no new doc/code gaps
 - [ ] exFAT is a different filesystem and is not in scope here
@@ -122,8 +122,11 @@ All eleven configurations passed on 2026-10-06 on dev (99 checks; dosfstools 4.2
 mtools 4.0.49). Not yet run on the build-VM image: a 2026-10-10 attempt
 waited 30 min behind ~20 builds and was cancelled. The kernel stage (loop mount rw -> write -> mkdir -p -> long
 name -> compare -> unmount -> fsck.fat -n -> remount) runs only as root and is
-reported `SKIP` otherwise; it last ran, all eleven passing, on 2026-08-19.
-Where it should run now is #4 (needs-owner). `cargo test` (plain `sc-build`)
+reported `SKIP` otherwise. Its home is a throwaway VM (#4, owner 2026-10-06):
+`tests/vm/build-image.sh` (via `sc-build`, out with `SC_BUILD_OUT`) and
+`stormcentral testhost boot nanatest1 --expect 'VERIFY PASS'` (command in
+README "Verified"). All eleven passed it there on 2026-11-07 (boot
+9a33e8fc2b, image from fe82874, kernel 7.2.11-200.fc44). `cargo test` (plain `sc-build`)
 covers the golden comparison.
 
 The fsck.fat after a write is the one that counts, and our own `fsck-fat` is

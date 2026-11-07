@@ -142,7 +142,7 @@ of FAT implementations that are not ours, on the machine it runs on:
 |---|---|---|
 | 1. fresh image | `fsck.fat -n`, then our `fsck-fat` | dosfstools |
 | 2. mtools write | `mmd` nested directories, `mcopy` a file, 2 MiB twice (400 KiB on the 1.44 MB floppy, which cannot hold 4 MiB) and a long file name, read all back and compare, then `fsck.fat -n` and our `fsck-fat` | mtools |
-| 3. kernel write | loop mount read-write, `mkdir -p`, write, copy, long file name, compare, unmount, `fsck.fat -n`, our `fsck-fat`, remount and read back | root |
+| 3. kernel write | loop mount read-write, `mkdir -p`, write, copy, long file name, compare, unmount, `fsck.fat -n`, our `fsck-fat`, remount and read back | root — or the `tests/vm/` image, below |
 
 The day-to-day run is through `sc-build`, on a fresh build VM made for the job
 and destroyed after it, as the unprivileged build user:
@@ -155,13 +155,36 @@ There it runs stages 1 and 2 and reports stage 3 as `SKIP` — never as a pass.
 **All eleven configurations pass stages 1 and 2** (dev.g8.lo, Fedora 43,
 dosfstools 4.2, mtools 4.0.49, 2026-10-06 — before dev was retired; it has
 not yet run on the build-VM image, which needs dosfstools, or the script stops,
-and mtools, or stage 2 is `SKIP`). Run as root (a privileged
-container, or a Linux machine of your own) it runs stage 3 as well;
+and mtools, or stage 2 is `SKIP`). Run as root it runs stage 3 as well;
 `--require-mount` makes a skipped kernel stage a failure, and
-`--require-mtools` does the same for a missing mtools. The kernel stage last
-ran on 2026-08-19, when all eleven configurations passed it; running it
-somewhere a session may reach is
-[#4](https://github.com/glennswest/mkfs.dos.rs/issues/4).
+`--require-mtools` does the same for a missing mtools.
+
+### The kernel stage, in a throwaway VM
+
+Stage 3 runs in a VM that stormcentral boots and destroys, not as root on any
+machine of ours (owner, 2026-10-06, on
+[#4](https://github.com/glennswest/mkfs.dos.rs/issues/4)).
+`tests/vm/build-image.sh OUT.img` makes a GPT disk whose ESP boots the UEFI
+Shell, which starts the build box's own kernel with an initramfs of busybox,
+the loop/fat/vfat/nls modules, dosfstools' `fsck.fat`, and this checkout's
+`mkimage` and `fsck-fat`. `tests/vm/init.sh` is its PID 1: for each of the
+same eleven configurations it formats with `mkimage`, runs `fsck.fat -n` and
+`fsck-fat`, loop-mounts read-write, `mkdir -p`, writes a file, 2 MiB (400 KiB
+on the floppy), a copy within the volume and a long file name, compares,
+unmounts, runs `fsck.fat -n` and `fsck-fat` again, remounts read-only and
+reads it all back. It prints `VERIFY PASS` or `VERIFY FAIL <why>` on serial.
+
+```
+SC_BUILD_OUT=tmp/mkfs-dos-verify.img SC_BUILD_OUT_TO=tmp/mkfs-dos-verify.img \
+  sc-build 'tests/vm/build-image.sh tmp/mkfs-dos-verify.img'
+stormcentral testhost boot nanatest1 --image tmp/mkfs-dos-verify.img \
+  --expect 'VERIFY PASS' --fail 'VERIFY FAIL' --timeout 900 --memory 2048 \
+  --project mkfs.dos.rs --url http://stormcentral.g8.lo
+```
+
+**All eleven configurations pass the kernel stage** (2026-11-07, boot
+`9a33e8fc2b` on nanatest1, image from `fe82874`: kernel
+7.2.11-200.fc44, dosfstools 4.2; `VERIFY PASS` 13.7 s after power-on).
 
 The `fsck.fat` after a write is the one that counts. "Mounts read-write" and
 "is writable" are different claims, and only a completed write proves the

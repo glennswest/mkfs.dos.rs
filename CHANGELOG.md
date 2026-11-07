@@ -41,6 +41,10 @@ leaves consistent.
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
+### 2026-11-07
+- **test:** `tests/vm/` — the kernel loop-mount stage in a throwaway VM booted by `stormcentral testhost boot`, as the owner decided on #4 (not a privileged container, not a manual root check). `build-image.sh` makes a kernel + busybox UEFI disk (no root) carrying `mkimage`, `fsck-fat` and dosfstools' `fsck.fat`; `init.sh` runs verify-on-linux.sh's stage 3 over the same eleven configurations and prints `VERIFY PASS` / `VERIFY FAIL <why>`. Boot 9a33e8fc2b on nanatest1 passed all eleven
+- **docs:** README "Verified", CLAUDE.md and the `verify-on-linux.sh` header say where the kernel stage runs (the `tests/vm/` VM), not "a privileged container, or a Linux machine of your own"
+
 ### 2026-10-10
 - **docs:** refresh since 2026-10-02 (the only code change is `tests/verify-on-linux.sh`, #1): README and CLAUDE.md say `sc-build tests/verify-on-linux.sh` runs on a fresh build VM (dev.g8.lo is retired), that the 1.44 MB floppy case writes 400 KiB twice rather than 2 MiB, and that the 2026-10-06 pass was on dev and has not yet repeated on the build-VM image. CLI flags, defaults, exit codes, `mkimage` options and "How it ships" (library by git tag/rev; no container, port, config or API) re-checked — unchanged, no `docs/` directory, no new doc/code gaps
 
