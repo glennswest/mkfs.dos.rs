@@ -41,6 +41,9 @@ leaves consistent.
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
+### 2026-11-14
+- **docs:** refresh since 2026-11-07 (`git log --since=2026-11-07`: only the docs-only research note `docs/research/2026-11-07.md`; no library, CLI, config or test change). README / CLAUDE.md re-checked, no doc/code gap, no issue filed
+
 ### 2026-11-07
 - **test:** `tests/vm/` — the kernel loop-mount stage in a throwaway VM booted by `stormcentral testhost boot`, as the owner decided on #4 (not a privileged container, not a manual root check). `build-image.sh` makes a kernel + busybox UEFI disk (no root) carrying `mkimage`, `fsck-fat` and dosfstools' `fsck.fat`; `init.sh` runs verify-on-linux.sh's stage 3 over the same eleven configurations and prints `VERIFY PASS` / `VERIFY FAIL <why>`. Boot 9a33e8fc2b on nanatest1 passed all eleven
 - **docs:** README "Verified", CLAUDE.md and the `verify-on-linux.sh` header say where the kernel stage runs (the `tests/vm/` VM), not "a privileged container, or a Linux machine of your own"
