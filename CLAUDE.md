@@ -92,7 +92,7 @@ each is a `gap` issue: #6 `-C`, #7 `-c`/`-l`, #8 `--mbr`, #9 `--offset`,
 - [ ] #8 An MBR partition table in the boot sector (`--mbr`), for a whole-disk
       image Windows should recognise
 - [ ] #6 `-C`, #9 `--offset`, #10 `-m`, #11 `-I`/`-A`/`--codepage`/`--variant`
-- [x] #5 — README stub line "Not implemented: …" removed; the missing flags
+- [x] #5 — README stub line listing unbuilt flags removed; the missing flags
       were already absent from the CLI; each filed as a `gap` issue (2026-11-19)
 - [x] #1 — kernel verification runnable without a local build or root
       (2026-10-06): `verify-on-linux.sh` runs where invoked, and
