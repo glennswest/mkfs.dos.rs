@@ -84,8 +84,7 @@ whole device. Flags follow `mkfs.fat` where they mean the same thing:
 | `--dry-run` | print the geometry and write nothing (not in `mkfs.fat`) | off |
 | `-v` / `-q` | print the geometry after formatting / print nothing | one-line report |
 
-Not implemented: `-C` (create the file), `-c` / `-l` (bad blocks), `--mbr`,
-`-I`, `-m`, `-A`, `--offset`, `--codepage`, `--variant`.
+Any other flag is rejected as unknown.
 
 `fsck-fat DEVICE` takes `-n` (check only — the default), `-a` (repair what can
 be repaired) and `-v` (report unusual-but-legal findings too). Exit codes are

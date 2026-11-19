@@ -41,6 +41,9 @@ leaves consistent.
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
+### 2026-11-19
+- **docs:** README no longer lists the `mkfs.fat` flags `mkfs-fat` lacks ("Not implemented: …" was a stub, #5). They were already absent from the CLI (clap rejects them as unknown); each is now a `gap` issue: #6 `-C`, #7 `-c`/`-l`, #8 `--mbr`, #9 `--offset`, #10 `-m`, #11 `-I`/`-A`/`--codepage`/`--variant`
+
 ### 2026-11-14
 - **docs:** refresh since 2026-11-07 (`git log --since=2026-11-07`: only the docs-only research note `docs/research/2026-11-07.md`; no library, CLI, config or test change). README / CLAUDE.md re-checked, no doc/code gap, no issue filed
 

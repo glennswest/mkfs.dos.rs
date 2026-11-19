@@ -58,8 +58,10 @@ to find out why it is there.
 
 Ships as a library by git tag only — not on crates.io, not a stormcentral
 component (no container, port or config). The CLI flags and their divergences
-from `mkfs.fat` (`-H` for hidden sectors, `--fixed`, `--dry-run`, no `-C`) are
-tabled in README.
+from `mkfs.fat` (`-H` for hidden sectors, `--fixed`, `--dry-run`) are tabled in README.
+The `mkfs.fat` flags not built are absent from the CLI (unknown flag) and
+each is a `gap` issue: #6 `-C`, #7 `-c`/`-l`, #8 `--mbr`, #9 `--offset`,
+#10 `-m`, #11 `-I`/`-A`/`--codepage`/`--variant`.
 
 ## Work plan
 
@@ -86,9 +88,12 @@ tabled in README.
       by building a throwaway crate that takes `fio-dos` by git
 - [x] #2, #3 — docs say fio.dos.rs pins a rev, not a tag, and when to ask for
       a bump (2026-10-06)
-- [ ] Bad block list (`-c`, `-l`), which marks clusters `0x…fff7`
-- [ ] An MBR partition table in the boot sector (`--mbr`), for a whole-disk
+- [ ] #7 Bad block list (`-c`, `-l`), which marks clusters `0x…fff7`
+- [ ] #8 An MBR partition table in the boot sector (`--mbr`), for a whole-disk
       image Windows should recognise
+- [ ] #6 `-C`, #9 `--offset`, #10 `-m`, #11 `-I`/`-A`/`--codepage`/`--variant`
+- [x] #5 — README stub line "Not implemented: …" removed; the missing flags
+      were already absent from the CLI; each filed as a `gap` issue (2026-11-19)
 - [x] #1 — kernel verification runnable without a local build or root
       (2026-10-06): `verify-on-linux.sh` runs where invoked, and
       `sc-build tests/verify-on-linux.sh` runs fsck.fat + an mtools write +
