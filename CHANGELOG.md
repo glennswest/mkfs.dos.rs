@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### 2026-11-20
+- **feat:** `mkfs-fat -m FILE` (`-` for standard input) replaces the boot
+  sector's `This is not a bootable disk` message, encoded as `mkfs.fat 4.2`
+  reads it: CR and NUL dropped, LF -> CR LF mid-line, tabs to 8 columns, cut at
+  447 bytes (419 on FAT32) with its `message too long; truncated` warning. A
+  file that cannot be read stops the format. Library: `Params::boot_message`,
+  `BootMessage` (#10).
+- **test:** four `-m` golden images from `mkfs.fat 4.2` (FAT12, FAT16, FAT32;
+  short and over-long messages), compared byte for byte.
+- **chore:** `tests/make-golden.sh` runs where it is invoked (dev is retired)
+  and can hand its images off a build VM as a tar (`SC_BUILD_OUT`).
+
 ## [v0.1.0] — 2026-08-19
 
 First working release. FAT12, FAT16 and FAT32 images that are byte-identical to

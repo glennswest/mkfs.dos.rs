@@ -97,7 +97,35 @@ const CASES: &[Case] = &[
         size: 64 * MIB,
         params: || Params::new().invariant().num_fats(1),
     },
+    // `-m FILE` (#10): the boot code's message replaced. The short one has
+    // tabs, a CR, a blank line and a NUL, each of which `mkfs.fat` rewrites;
+    // the long one overruns the area and is cut at 447 bytes on FAT12/16 and
+    // at 419 on FAT32, whose boot code also moves 28 bytes and is re-pointed.
+    Case {
+        name: "fat12-1440k-msg",
+        size: 1440 * KIB,
+        params: || Params::new().invariant().boot_message(MSG_SHORT),
+    },
+    Case {
+        name: "fat16-16m-msg-long",
+        size: 16 * MIB,
+        params: || Params::new().invariant().boot_message(MSG_LONG),
+    },
+    Case {
+        name: "fat32-512m-msg",
+        size: 512 * MIB,
+        params: || Params::new().invariant().boot_message(MSG_SHORT),
+    },
+    Case {
+        name: "fat32-512m-msg-long",
+        size: 512 * MIB,
+        params: || Params::new().invariant().boot_message(MSG_LONG),
+    },
 ];
+
+/// The message files `tests/make-golden.sh` hands `mkfs.fat -m`.
+const MSG_SHORT: &[u8] = include_bytes!("golden/msg-short.txt");
+const MSG_LONG: &[u8] = include_bytes!("golden/msg-long.txt");
 
 #[tokio::test]
 async fn our_images_are_identical_to_dosfstools() {
