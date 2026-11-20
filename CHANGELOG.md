@@ -11,6 +11,7 @@
   `BootMessage` (#10).
 - **test:** four `-m` golden images from `mkfs.fat 4.2` (FAT12, FAT16, FAT32;
   short and over-long messages), compared byte for byte.
+- **fix:** a same-type cast in `detect_sector_size` that clippy 1.95 rejects.
 - **chore:** `tests/make-golden.sh` runs where it is invoked (dev is retired)
   and can hand its images off a build VM as a tar (`SC_BUILD_OUT`).
 
