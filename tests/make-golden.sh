@@ -61,6 +61,7 @@ for case in "${CASES[@]}"; do
 done
 
 if [[ -n $TAR ]]; then
+    mkdir -p "$(dirname "$TAR")"   # tmp/ is gitignored, so absent in a fresh clone
     tar -cf "$TAR" -C "$W" .
     echo "wrote $TAR"
 else
