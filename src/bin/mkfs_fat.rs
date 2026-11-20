@@ -3,12 +3,15 @@
 //! Flags follow dosfstools' `mkfs.fat` where they mean the same thing, so
 //! muscle memory and existing scripts carry over.
 
+use std::io::Read;
+
 use clap::Parser;
 
 use mkfs_dos::device::{BlockDevice, FileDevice};
 use mkfs_dos::format::format_with;
 use mkfs_dos::layout::Geometry;
 use mkfs_dos::params::{FatType, Params};
+use mkfs_dos::BootMessage;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -70,6 +73,11 @@ struct Args {
     /// BIOS drive number, in hex.
     #[arg(short = 'D', long)]
     drive_number: Option<String>,
+
+    /// Read the boot-sector message from FILE (`-` for standard input). It is
+    /// what the volume prints if a machine tries to boot from it.
+    #[arg(short = 'm', long = "message-file", value_name = "FILE")]
+    message_file: Option<String>,
 
     /// Sector holding the backup boot sector. FAT32 only.
     #[arg(short = 'b', long)]
@@ -145,6 +153,23 @@ async fn main() -> anyhow::Result<()> {
         params.geometry = Some((h.parse()?, s.parse()?));
     }
 
+    // Unlike `mkfs.fat`, which reports a file it cannot open and goes on with
+    // the default message, a message that cannot be read stops the format.
+    let mut message = None;
+    if let Some(path) = &args.message_file {
+        let raw = if path == "-" {
+            let mut buf = Vec::new();
+            std::io::stdin()
+                .read_to_end(&mut buf)
+                .map_err(|e| anyhow::anyhow!("cannot read the message from standard input: {e}"))?;
+            buf
+        } else {
+            std::fs::read(path).map_err(|e| anyhow::anyhow!("cannot read {path}: {e}"))?
+        };
+        message = Some(BootMessage::encode(&raw));
+        params.boot_message = Some(raw);
+    }
+
     let device = FileDevice::open(&args.device)
         .await
         .map_err(|e| anyhow::anyhow!("cannot open {}: {e}", args.device))?;
@@ -165,6 +190,17 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let geometry = Geometry::compute(size, device.logical_sector_size(), &params)?;
+
+    // The two warnings `mkfs.fat` gives, at the two points it gives them: the
+    // message overran the boot code area, and then FAT32's shorter one.
+    if let Some(message) = &message {
+        if message.truncated {
+            eprintln!("Warning: message too long; truncated");
+        }
+        if geometry.fat_type == FatType::Fat32 && !message.fits_fat32() {
+            eprintln!("Warning: message too long; truncated");
+        }
+    }
 
     if args.dry_run {
         print_geometry(&geometry);

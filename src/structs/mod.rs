@@ -9,6 +9,6 @@ pub mod boot;
 pub mod dirent;
 pub mod fsinfo;
 
-pub use boot::{BootSector, BOOT_SECTOR_LEN, BOOT_SIGN};
+pub use boot::{BootMessage, BootSector, BOOT_SECTOR_LEN, BOOT_SIGN};
 pub use dirent::{Attributes, DirEntry, DosTime, LfnEntry, DIR_ENTRY_LEN};
 pub use fsinfo::FsInfo;

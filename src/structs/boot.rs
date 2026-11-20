@@ -78,6 +78,96 @@ pub fn patch_message_offset(code: &mut [u8], code_offset: usize) {
     code[MSG_OFFSET_OFFSET + 1] = (addr >> 8) as u8;
 }
 
+/// The boot code with a message of one's own in place of the default — what
+/// `mkfs.fat -m FILE` writes.
+///
+/// `code` is the full [`BOOTCODE_SIZE`] area as `mkfs.fat` leaves its
+/// `dummy_boot_code` after reading the file: the 29 bytes of code, then the
+/// message, then zeroes, with the last byte always zero. FAT32 has only
+/// [`BOOTCODE_FAT32_SIZE`] bytes for it; the formatter cuts it there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootMessage {
+    /// The boot code area, [`BOOTCODE_SIZE`] bytes.
+    pub code: Vec<u8>,
+    /// The message did not fit in [`BOOTCODE_SIZE`] and was cut — when
+    /// `mkfs.fat` prints `Warning: message too long; truncated`.
+    pub truncated: bool,
+}
+
+impl BootMessage {
+    /// Encode a message the way `mkfs.fat`'s `-m` reads its file.
+    ///
+    /// Byte for byte the loop in dosfstools 4.2 `main()`, `case 'm'`: carriage
+    /// returns and NULs are dropped; a line feed becomes CR LF, except at the
+    /// start of a line, where it stays a bare LF; a tab becomes spaces to the
+    /// next multiple of eight columns; anything else is copied as it is. The
+    /// message stops one byte short of the end of the area, and a zero
+    /// terminates it.
+    ///
+    /// `truncated` follows `mkfs.fat`'s test, which is that the file had not
+    /// reached its end when the area filled. A message that fills the area
+    /// exactly therefore counts as truncated, as it does there.
+    pub fn encode(message: &[u8]) -> Self {
+        let mut code = DUMMY_BOOT_CODE[..MESSAGE_OFFSET].to_vec();
+        code.resize(BOOTCODE_SIZE, 0);
+        let limit = BOOTCODE_SIZE - 1;
+        let mut i = MESSAGE_OFFSET;
+        let mut pos = 0usize;
+        let mut bytes = message.iter();
+        let mut at_end = false;
+        loop {
+            match bytes.next() {
+                None => {
+                    // EOF: the terminator. The area past it is already zero.
+                    code[i] = 0;
+                    at_end = true;
+                }
+                Some(b'\r') | Some(0) => {}
+                Some(b'\n') => {
+                    if pos != 0 {
+                        code[i] = b'\r';
+                        i += 1;
+                        pos = 0;
+                    }
+                    code[i] = b'\n';
+                    i += 1;
+                }
+                Some(b'\t') => loop {
+                    code[i] = b' ';
+                    i += 1;
+                    pos += 1;
+                    if pos % 8 == 0 || i >= limit {
+                        break;
+                    }
+                },
+                Some(&c) => {
+                    code[i] = c;
+                    i += 1;
+                    pos += 1;
+                }
+            }
+            if at_end || i >= limit {
+                break;
+            }
+        }
+        // `dummy_boot_code[BOOTCODE_SIZE - 1] = '\0'`: a CR LF written at the
+        // last two bytes loses its LF here, as it does there.
+        code[limit] = 0;
+        BootMessage {
+            code,
+            truncated: !at_end,
+        }
+    }
+
+    /// Whether the message survives FAT32's shorter boot code area whole.
+    ///
+    /// `mkfs.fat` checks the last byte of the FAT32 area and, if it is not
+    /// zero, warns `message too long; truncated` and zeroes it.
+    pub fn fits_fat32(&self) -> bool {
+        self.code[BOOTCODE_FAT32_SIZE - 1] == 0
+    }
+}
+
 /// The boot sector, decoded.
 ///
 /// Field names follow dosfstools; the doc comment gives the byte offset and,
@@ -501,6 +591,54 @@ mod tests {
         assert_eq!(buf[66], EXT_BOOT_SIGN);
         assert_eq!(&buf[71..82], b"NO NAME    ");
         assert_eq!(&buf[82..90], b"FAT32   ");
+    }
+
+    #[test]
+    fn a_message_is_encoded_as_mkfs_fat_reads_it() {
+        let m = BootMessage::encode(b"ab\tc\r\n\nx\0y");
+        assert!(!m.truncated);
+        assert_eq!(m.code.len(), BOOTCODE_SIZE);
+        assert_eq!(&m.code[..MESSAGE_OFFSET], &DUMMY_BOOT_CODE[..MESSAGE_OFFSET]);
+        // Tab to column 8, CR dropped, LF -> CR LF mid-line, bare LF at the
+        // start of a line, NUL dropped, then the terminator.
+        let want = b"ab      c\r\n\nxy\0";
+        assert_eq!(&m.code[MESSAGE_OFFSET..MESSAGE_OFFSET + want.len()], want);
+        assert!(m.code[MESSAGE_OFFSET + want.len()..].iter().all(|&b| b == 0));
+        assert!(m.fits_fat32());
+    }
+
+    #[test]
+    fn a_long_message_is_cut_one_byte_short_of_the_area() {
+        let m = BootMessage::encode(&[b'x'; 1000]);
+        assert!(m.truncated);
+        assert!(m.code[MESSAGE_OFFSET..BOOTCODE_SIZE - 1].iter().all(|&b| b == b'x'));
+        assert_eq!(m.code[BOOTCODE_SIZE - 1], 0);
+        assert!(!m.fits_fat32());
+
+        // Exactly filling the area is "truncated" too: the file had not been
+        // read to its end when the area filled.
+        let exact = BootMessage::encode(&[b'x'; BOOTCODE_SIZE - 1 - MESSAGE_OFFSET]);
+        assert!(exact.truncated);
+        let short = BootMessage::encode(&[b'x'; BOOTCODE_SIZE - 2 - MESSAGE_OFFSET]);
+        assert!(!short.truncated);
+        assert_eq!(short.code[BOOTCODE_SIZE - 2], 0);
+    }
+
+    #[test]
+    fn a_line_break_at_the_end_of_the_area_loses_its_line_feed() {
+        let mut msg = vec![b'x'; BOOTCODE_SIZE - 2 - MESSAGE_OFFSET];
+        msg.extend_from_slice(b"\nmore");
+        let m = BootMessage::encode(&msg);
+        assert_eq!(m.code[BOOTCODE_SIZE - 2], b'\r');
+        assert_eq!(m.code[BOOTCODE_SIZE - 1], 0);
+        assert!(m.truncated);
+    }
+
+    #[test]
+    fn the_default_message_is_what_an_empty_override_is_not() {
+        let m = BootMessage::encode(b"");
+        assert_eq!(m.code[MESSAGE_OFFSET], 0);
+        assert!(!m.truncated);
     }
 
     #[test]

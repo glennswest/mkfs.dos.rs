@@ -219,12 +219,17 @@ pub(crate) fn build_boot_sector(
     let mut jump = BOOT_JUMP;
     jump[1] = (code_offset - 2) as u8;
 
-    let mut boot_code = DUMMY_BOOT_CODE.to_vec();
-    boot_code.resize(
-        if fat32 { BOOTCODE_FAT32_SIZE } else { BOOTCODE_SIZE },
-        0,
-    );
+    // `-m` replaces the message; the code in front of it is the same.
+    let mut boot_code = match &params.boot_message {
+        Some(message) => boot::BootMessage::encode(message).code,
+        None => DUMMY_BOOT_CODE.to_vec(),
+    };
+    boot_code.resize(BOOTCODE_SIZE, 0);
     if fat32 {
+        // FAT32's area is shorter. `mkfs.fat` zeroes its last byte so the
+        // message stays terminated, then cuts the rest off.
+        boot_code[BOOTCODE_FAT32_SIZE - 1] = 0;
+        boot_code.truncate(BOOTCODE_FAT32_SIZE);
         boot::patch_message_offset(&mut boot_code, code_offset);
     }
 

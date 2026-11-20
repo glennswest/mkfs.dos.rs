@@ -78,4 +78,4 @@ pub use fs::Filesystem;
 pub use fsck::{check, FsckOptions, FsckReport};
 pub use layout::Geometry;
 pub use params::{DiskType, FatType, Params};
-pub use structs::{BootSector, DirEntry, FsInfo};
+pub use structs::{BootMessage, BootSector, DirEntry, FsInfo};

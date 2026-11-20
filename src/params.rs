@@ -234,6 +234,10 @@ pub struct Params {
     /// would otherwise appear, so that two runs over the same geometry produce
     /// byte-identical images. This is what makes a golden test possible.
     pub invariant: bool,
+    /// `-m`: the message the boot code prints when the volume is booted, in
+    /// place of `This is not a bootable disk`. The raw bytes of the file;
+    /// [`crate::structs::BootMessage::encode`] turns them into what is written.
+    pub boot_message: Option<Vec<u8>>,
 }
 
 impl Params {
@@ -334,6 +338,12 @@ impl Params {
     /// Produce a byte-reproducible image: fixed serial number, fixed timestamp.
     pub fn invariant(mut self) -> Self {
         self.invariant = true;
+        self
+    }
+
+    /// Set the boot-sector message, as `mkfs.fat -m` reads it from a file.
+    pub fn boot_message(mut self, message: impl Into<Vec<u8>>) -> Self {
+        self.boot_message = Some(message.into());
         self
     }
 

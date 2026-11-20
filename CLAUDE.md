@@ -91,7 +91,10 @@ each is a `gap` issue: #6 `-C`, #7 `-c`/`-l`, #8 `--mbr`, #9 `--offset`,
 - [ ] #7 Bad block list (`-c`, `-l`), which marks clusters `0x…fff7`
 - [ ] #8 An MBR partition table in the boot sector (`--mbr`), for a whole-disk
       image Windows should recognise
-- [ ] #6 `-C`, #9 `--offset`, #10 `-m`, #11 `-I`/`-A`/`--codepage`/`--variant`
+- [ ] #10 `-m FILE` boot-sector message (IN PROGRESS 2026-11-20): `BootMessage::encode`
+      after dosfstools 4.2 `case 'm'`; `make-golden.sh` now runs where invoked
+      (sc-build + SC_BUILD_OUT) and records four `-m` goldens
+- [ ] #6 `-C`, #9 `--offset`, #11 `-I`/`-A`/`--codepage`/`--variant`
 - [x] #5 — README stub line listing unbuilt flags removed; the missing flags
       were already absent from the CLI; each filed as a `gap` issue (2026-11-19)
 - [x] #1 — kernel verification runnable without a local build or root

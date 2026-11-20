@@ -1,0 +1,12 @@
+Line 01 of a boot message far longer than the boot sector holds.
+Line 02 of a boot message far longer than the boot sector holds.
+Line 03 of a boot message far longer than the boot sector holds.
+Line 04 of a boot message far longer than the boot sector holds.
+Line 05 of a boot message far longer than the boot sector holds.
+Line 06 of a boot message far longer than the boot sector holds.
+Line 07 of a boot message far longer than the boot sector holds.
+Line 08 of a boot message far longer than the boot sector holds.
+Line 09 of a boot message far longer than the boot sector holds.
+Line 10 of a boot message far longer than the boot sector holds.
+Line 11 of a boot message far longer than the boot sector holds.
+Line 12 of a boot message far longer than the boot sector holds.
