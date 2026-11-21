@@ -53,10 +53,14 @@ CASES=(
 
 for case in "${CASES[@]}"; do
     IFS=: read -r name kib args <<< "$case"
-    truncate -s $((kib * 1024)) "$W/$name.img"
+    # Run inside $W so the dump names the image, not the build VM's paths.
     # shellcheck disable=SC2086 # args is a word list on purpose
-    mkfs.fat --invariant -v $args "$W/$name.img" > "$W/$name.dump" 2>&1
-    gzip -9 -f "$W/$name.img"
+    (
+        cd "$W"
+        truncate -s $((kib * 1024)) "$name.img"
+        mkfs.fat --invariant -v $args "$name.img" > "$name.dump" 2>&1
+        gzip -9 -f "$name.img"
+    )
     echo "recorded $name"
 done
 

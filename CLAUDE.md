@@ -73,7 +73,7 @@ each is a `gap` issue: #6 `-C`, #7 `-c`/`-l`, #8 `--mbr`, #9 `--offset`,
       the 4085 / 65525 cluster thresholds, alignment
 - [x] `format` — the formatter
 - [x] Golden references captured from real `mkfs.fat --invariant`; byte-exact
-      across twelve configurations, FAT12 through FAT32
+      across sixteen configurations, FAT12 through FAT32 (four with `-m`)
 - [x] `fs` — the read layer (boot sector, FAT chains, directories)
 - [x] `fsck` — chain validation, cross-links, lost clusters, FSInfo
 - [x] CLI binaries `mkfs-fat`, `fsck-fat`
@@ -88,23 +88,17 @@ each is a `gap` issue: #6 `-C`, #7 `-c`/`-l`, #8 `--mbr`, #9 `--offset`,
       by building a throwaway crate that takes `fio-dos` by git
 - [x] #2, #3 — docs say fio.dos.rs pins a rev, not a tag, and when to ask for
       a bump (2026-10-06)
-- [ ] #12 review findings in `fsck.rs` (2026-11-20): 385d8a31c15b no freeing
+- [x] #12 review findings in `fsck.rs` (2026-11-20/21): 385d8a31c15b no freeing
       after an incomplete walk, 95237131f4a2 no size repair from a partial
-      chain, c6b6e031797c backup/FSInfo pointers validated — code + tests pushed,
-      awaiting sc-build (main's cargo test also needs #10's goldens committed)
+      chain, c6b6e031797c backup/FSInfo pointers validated; one test each,
+      sc-build 6c1dae9 passed (72 unit tests, 16 goldens, clippy clean)
 - [ ] #7 Bad block list (`-c`, `-l`), which marks clusters `0x…fff7`
 - [ ] #8 An MBR partition table in the boot sector (`--mbr`), for a whole-disk
       image Windows should recognise
-- [ ] #10 `-m FILE` boot-sector message (IN PROGRESS 2026-11-20): `BootMessage::encode`
-      after dosfstools 4.2 `case 'm'`; `make-golden.sh` now runs where invoked
-      (sc-build + SC_BUILD_OUT) and records four `-m` goldens
-      State: code, tests, docs, CHANGELOG pushed (6625808). On a build VM
-      (a0fa12e) all sixteen goldens — the four `-m` ones freshly recorded by
-      mkfs.fat 4.2 — compared identical; clippy then failed on a pre-existing
-      cast (fixed in 6625808), so the golden tar was not carried off. NEXT:
-      rerun the recorder command (README "Golden comparison"), `tar -xf
-      tmp/golden.tar -C tests/golden`, commit the four `*-msg*` goldens,
-      plain `sc-build`, close #10 and build-failure #15
+- [x] #10 `-m FILE` boot-sector message (2026-11-20/21): `BootMessage::encode`
+      after dosfstools 4.2 `case 'm'`; four `-m` goldens recorded by mkfs.fat
+      4.2 on a build VM (`make-golden.sh` via sc-build + SC_BUILD_OUT); all
+      sixteen byte-identical at 6c1dae9
 - [ ] #6 `-C`, #9 `--offset`, #11 `-I`/`-A`/`--codepage`/`--variant`
 - [x] #5 — README stub line listing unbuilt flags removed; the missing flags
       were already absent from the CLI; each filed as a `gap` issue (2026-11-19)
