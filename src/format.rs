@@ -261,7 +261,7 @@ pub(crate) fn build_boot_sector(
 ) -> Result<BootSector> {
     let fat32 = geometry.fat_type == FatType::Fat32;
     if geometry.variant == Variant::Atari {
-        return Ok(atari_boot_sector(geometry, volume_id));
+        return atari_boot_sector(geometry, volume_id);
     }
 
     let mut oem_name = *b"mkfs.fat";
@@ -302,14 +302,14 @@ pub(crate) fn build_boot_sector(
     Ok(BootSector {
         jump,
         oem_name,
-        bytes_per_sector: geometry.sector_size as u16,
+        bytes_per_sector: bpb16("BPB_BytsPerSec", geometry.sector_size)?,
         sectors_per_cluster: geometry.sectors_per_cluster,
-        reserved_sectors: geometry.reserved_sectors as u16,
+        reserved_sectors: bpb16("BPB_RsvdSecCnt", geometry.reserved_sectors)?,
         num_fats: geometry.num_fats,
-        root_entries: geometry.root_entries as u16,
+        root_entries: bpb16("BPB_RootEntCnt", geometry.root_entries)?,
         total_sectors_16: total_16,
         media: geometry.media,
-        fat_length_16: if fat32 { 0 } else { geometry.fat_length as u16 },
+        fat_length_16: if fat32 { 0 } else { bpb16("BPB_FATSz16", geometry.fat_length)? },
         sectors_per_track: geometry.sectors_per_track,
         heads: geometry.heads,
         hidden_sectors: geometry.hidden_sectors,
@@ -341,7 +341,7 @@ pub(crate) fn build_boot_sector(
 /// number is written: no `0x29`, no serial, no label (the label lives in the
 /// root directory alone), no `fs_type`, no boot code — and the caller leaves
 /// out the `0xAA55`.
-fn atari_boot_sector(geometry: &Geometry, volume_id: u32) -> BootSector {
+fn atari_boot_sector(geometry: &Geometry, volume_id: u32) -> Result<BootSector> {
     let fat32 = geometry.fat_type == FatType::Fat32;
     let mut oem_name = *b"kdosf\0\0\0";
     oem_name[5..8].copy_from_slice(&volume_id.to_le_bytes()[..3]);
@@ -350,17 +350,17 @@ fn atari_boot_sector(geometry: &Geometry, volume_id: u32) -> BootSector {
     } else {
         (geometry.total_sectors as u16, 0)
     };
-    BootSector {
+    Ok(BootSector {
         jump: [0x60, 0x1c, b'm'],
         oem_name,
-        bytes_per_sector: geometry.sector_size as u16,
+        bytes_per_sector: bpb16("BPB_BytsPerSec", geometry.sector_size)?,
         sectors_per_cluster: geometry.sectors_per_cluster,
-        reserved_sectors: geometry.reserved_sectors as u16,
+        reserved_sectors: bpb16("BPB_RsvdSecCnt", geometry.reserved_sectors)?,
         num_fats: geometry.num_fats,
-        root_entries: geometry.root_entries as u16,
+        root_entries: bpb16("BPB_RootEntCnt", geometry.root_entries)?,
         total_sectors_16: total_16,
         media: geometry.media,
-        fat_length_16: if fat32 { 0 } else { geometry.fat_length as u16 },
+        fat_length_16: if fat32 { 0 } else { bpb16("BPB_FATSz16", geometry.fat_length)? },
         sectors_per_track: geometry.sectors_per_track,
         heads: geometry.heads,
         hidden_sectors: geometry.hidden_sectors,
@@ -378,7 +378,16 @@ fn atari_boot_sector(geometry: &Geometry, volume_id: u32) -> BootSector {
         volume_label: [0; 11],
         fs_type: [0; 8],
         boot_code: Vec::new(),
-    }
+    })
+}
+
+/// A geometry count narrowed into a 16-bit BPB field, or refused: never cut
+/// to its low 16 bits (finding e79fc78001cf). [`Geometry::validate`] has
+/// already refused these; this keeps the narrowing honest on its own.
+fn bpb16(field: &str, value: u32) -> Result<u16> {
+    u16::try_from(value).map_err(|_| {
+        crate::error::Error::invalid(format!("{value} does not fit the 16-bit {field}"))
+    })
 }
 
 /// The leading sectors of a fresh FAT: the reserved entries, and the root
@@ -676,6 +685,16 @@ mod tests {
         let err = format_with(&dev, &g, &params).await.unwrap_err();
         assert!(err.to_string().contains("FSInfo"), "{err}");
         assert!(dev.to_vec()[..512].iter().all(|&b| b == 0xa5), "sector 0 was written");
+    }
+
+    #[test]
+    fn bpb_fields_are_narrowed_checked() {
+        assert_eq!(bpb16("BPB_RsvdSecCnt", 65535).unwrap(), 65535);
+        assert!(bpb16("BPB_RsvdSecCnt", 65536).is_err());
+        let mut g = Geometry::compute(64 * MIB, 512, &Params::new()).unwrap();
+        g.root_entries = 65536;
+        let err = build_boot_sector(&g, &Params::new(), *NO_NAME, 0).unwrap_err();
+        assert!(err.to_string().contains("BPB_RootEntCnt"), "{err}");
     }
 
     // Finding e79fc78001cf: alignment rounds -R 65535 and -r 65535 to 65536,
