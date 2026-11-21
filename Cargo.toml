@@ -59,3 +59,8 @@ lto = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix = { version = "1.1.4", features = ["fs"] }
+
+# Runs the mkfs-fat binary, so it needs the CLI built.
+[[test]]
+name = "cli_create"
+required-features = ["cli"]

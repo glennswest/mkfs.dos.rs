@@ -106,6 +106,11 @@ struct Args {
     )]
     mbr: Option<String>,
 
+    /// Create DEVICE as a new file of BLOCKS × 1024 bytes, then format it.
+    /// BLOCKS is required, and an existing file is never touched.
+    #[arg(short = 'C')]
+    create: bool,
+
     /// Toggle the Atari variant of the filesystem: GEMDOS's boot sector and
     /// geometry. Each `-A` flips it, as in `mkfs.fat`.
     // Append with no value, not Count: Count keeps only the last
@@ -296,6 +301,33 @@ fn auto_mbr(path: &str) -> bool {
     !stacked && removable == 0
 }
 
+/// `-C`: create `path` as a new file of `blocks` 1024-byte blocks, as
+/// dosfstools 4.2 does: `open(O_EXCL | O_RDWR | O_CREAT, 0666)`, then
+/// `ftruncate`. An existing file is refused, never truncated. Like
+/// `mkfs.fat`, a file created here stays if the format then fails.
+fn create_image(path: &str, blocks: Option<u64>) -> anyhow::Result<()> {
+    let Some(blocks) = blocks else {
+        anyhow::bail!("Need intended size with -C.");
+    };
+    let size = blocks
+        .checked_mul(1024)
+        .ok_or_else(|| anyhow::anyhow!("{blocks} blocks is more bytes than a u64 holds"))?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true).write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o666);
+    }
+    let file = opts.open(path).map_err(|e| match e.kind() {
+        std::io::ErrorKind::AlreadyExists => anyhow::anyhow!("file {path} already exists"),
+        _ => anyhow::anyhow!("unable to create {path}: {e}"),
+    })?;
+    file.set_len(size)
+        .map_err(|e| anyhow::anyhow!("unable to resize {path}: {e}"))?;
+    Ok(())
+}
+
 /// The size to format: `blocks` 1024-byte blocks, or the whole device. A
 /// count whose byte size overflows `u64` or exceeds the device is refused
 /// before anything is written (finding 622740cebc3e: it used to wrap in a
@@ -371,6 +403,10 @@ async fn main() -> anyhow::Result<()> {
         };
         message = Some(BootMessage::encode(&raw));
         params.boot_message = Some(raw);
+    }
+
+    if args.create {
+        create_image(&args.device, args.blocks)?;
     }
 
     let device = FileDevice::open(&args.device)
@@ -565,6 +601,31 @@ mod tests {
         assert_eq!(has_children(&root.join("missing")), None);
         std::fs::remove_dir_all(&root).unwrap();
         assert!(block_sysfs_dir("/nonexistent/device").is_none());
+    }
+
+    // -C (#6): BLOCKS required, the file made at BLOCKS x 1024 bytes, and an
+    // existing file refused and left as it was.
+    #[test]
+    fn create_makes_a_new_file_and_never_an_existing_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("new.img");
+        let p = path.to_str().unwrap();
+        let err = create_image(p, None).unwrap_err();
+        assert_eq!(err.to_string(), "Need intended size with -C.");
+        assert!(!path.exists());
+
+        create_image(p, Some(1440)).unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 1440 * 1024);
+
+        std::fs::write(&path, b"keep").unwrap();
+        let err = create_image(p, Some(1440)).unwrap_err();
+        assert!(err.to_string().contains("already exists"), "{err}");
+        assert_eq!(std::fs::read(&path).unwrap(), b"keep");
+
+        assert!(create_image(dir.path().join("x").to_str().unwrap(), Some(u64::MAX)).is_err());
+        let a = Args::try_parse_from(["mkfs.fat", "-C", "img", "1440"]).unwrap();
+        assert!(a.create);
+        assert_eq!(a.blocks, Some(1440));
     }
 
     // Auto never writes a table on an image file or a non-block device.

@@ -89,6 +89,20 @@ for case in "${CASES[@]}"; do
     echo "recorded $name"
 done
 
+# -C (#6): mkfs.fat creates the file itself (O_EXCL + ftruncate). Its
+# output must be the truncated-file golden of the same size, byte for byte,
+# which is what lets tests/cli_create.rs compare `mkfs-fat -C` against it.
+for case in "fat12-1440k:1440" "fat16-16m:16384"; do
+    IFS=: read -r name kib <<< "$case"
+    (
+        cd "$W"
+        mkfs.fat --invariant -C "$name-create.img" "$kib" > /dev/null
+        gzip -dc "$name.img.gz" | cmp - "$name-create.img"
+        rm "$name-create.img"
+    )
+    echo "checked -C against $name"
+done
+
 if [[ -n $TAR ]]; then
     mkdir -p "$(dirname "$TAR")"   # tmp/ is gitignored, so absent in a fresh clone
     tar -cf "$TAR" -C "$W" .
