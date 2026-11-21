@@ -101,6 +101,14 @@ each is a `gap` issue: #6 `-C`, #7 `-c`/`-l`, #9 `--offset`,
 - [x] #17 review finding (2026-11-21): 622740cebc3e an overflowing `BLOCKS`
       count is refused (`checked_mul`), not wrapped into a size that fits; one test,
       sc-build 4f42938 passed (76 lib + 2 mkfs-fat unit tests, 16 goldens)
+- [x] #13 two major review findings in `fs.rs` (2026-11-21): 74ddc2dd4ffe
+      `set_fat_entry` serialised by a per-handle async lock over every FAT
+      copy (FAT12 neighbours share a byte; one handle per device),
+      fd9c0c4ab7a4 `open` refuses a FAT too short for its clusters, a zero
+      FAT, a count reaching the bad marker; `first_data_sector` in u64. One
+      test each (plus FAT32 zero/overflowing length); sc-build 879a0c2
+      passed (87 lib + 4 mkfs-fat unit tests, 24 goldens, clippy clean); the
+      race test fails with the lock removed
 - [ ] #7 Bad block list (`-c`, `-l`), which marks clusters `0x…fff7`
 - [x] #8 `--mbr[=y|n|a]` (2026-11-21): `FakeMbr` after dosfstools 4.2
       `setup_tables()` (signature at 440, one active entry at 446, message cut
