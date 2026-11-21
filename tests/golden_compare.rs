@@ -121,6 +121,51 @@ const CASES: &[Case] = &[
         size: 512 * MIB,
         params: || Params::new().invariant().boot_message(MSG_LONG),
     },
+    // `--mbr=y` (#8): a partition table in the boot sector, disk signature
+    // the invariant serial. One case per partition type `mkfs.fat` picks:
+    // 0x01 FAT12; 0x04 FAT16 under 65536 sectors; 0x06 within CHS reach;
+    // 0x0e past it, and with 255 heads; 0x0c FAT32. Then a long message cut
+    // at offset 439, where the table begins.
+    Case {
+        name: "fat12-1440k-mbr",
+        size: 1440 * KIB,
+        params: || Params::new().invariant().mbr(),
+    },
+    Case {
+        name: "fat16-16m-mbr",
+        size: 16 * MIB,
+        params: || Params::new().invariant().mbr(),
+    },
+    Case {
+        name: "fat16-64m-mbr",
+        size: 64 * MIB,
+        params: || Params::new().invariant().mbr(),
+    },
+    Case {
+        name: "fat16-64m-mbr-geom",
+        size: 64 * MIB,
+        params: || Params::new().invariant().geometry(255, 63).mbr(),
+    },
+    Case {
+        name: "fat16-1g-forced-mbr",
+        size: 1024 * MIB,
+        params: || Params::new().invariant().fat_type(FatType::Fat16).mbr(),
+    },
+    Case {
+        name: "fat32-1g-mbr",
+        size: 1024 * MIB,
+        params: || Params::new().invariant().mbr(),
+    },
+    Case {
+        name: "fat16-16m-msg-long-mbr",
+        size: 16 * MIB,
+        params: || Params::new().invariant().boot_message(MSG_LONG).mbr(),
+    },
+    Case {
+        name: "fat32-512m-msg-long-mbr",
+        size: 512 * MIB,
+        params: || Params::new().invariant().boot_message(MSG_LONG).mbr(),
+    },
 ];
 
 /// The message files `tests/make-golden.sh` hands `mkfs.fat -m`.

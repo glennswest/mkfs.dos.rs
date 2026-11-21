@@ -3,6 +3,13 @@
 ## [Unreleased]
 
 ### 2026-11-21
+- **feat:** `mkfs-fat --mbr[=y|n|a]` and `Params::mbr` write a (fake) MBR
+  partition table into the boot sector, as `mkfs.fat 4.2` does: disk
+  signature at 440 (kept from the device, the serial under `--invariant`),
+  one active entry from LBA 0 over the volume with `mkfs.fat`'s type byte and
+  CHS, and a `-m` message cut at 439. `auto`, the CLI default, writes it only
+  on a fixed whole-disk block device. `Report` gains `disk_signature` and
+  `message_cut_by_mbr`. Eight new golden images, byte-identical (#8).
 - **fix:** `mkfs-fat DEVICE BLOCKS` refuses a block count whose byte size
   overflows `u64`, instead of wrapping it (in a release build) into a smaller
   size that fits the device and formatting that (#17, finding 622740cebc3e).

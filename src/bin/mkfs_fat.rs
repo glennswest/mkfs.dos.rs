@@ -92,6 +92,20 @@ struct Args {
     #[arg(long)]
     fixed: bool,
 
+    /// Write a (fake) MBR partition table into the boot sector: one active
+    /// partition spanning the whole volume, so Windows recognises a whole-disk
+    /// image. `y` (what a bare `--mbr` means), `n`, or `a` — the default —
+    /// which writes one only on a fixed, whole-disk block device, as
+    /// `mkfs.fat` does; an image file gets none unless `--mbr=y`.
+    #[arg(
+        long,
+        value_name = "y|n|a",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "y"
+    )]
+    mbr: Option<String>,
+
     /// Use constant values wherever a timestamp or serial number would go, so
     /// two runs over the same geometry produce identical images.
     #[arg(long)]
@@ -121,6 +135,58 @@ fn parse_hex(name: &str, s: &str) -> anyhow::Result<u32> {
 fn parse_hex_u8(name: &str, s: &str) -> anyhow::Result<u8> {
     let v = parse_hex(name, s)?;
     u8::try_from(v).map_err(|_| anyhow::anyhow!("invalid {name} '{s}': {v:#x} is more than 0xff"))
+}
+
+/// What `--mbr` asked for: `Some(true)`/`Some(false)`, or `None` for auto.
+/// The spellings `mkfs.fat` takes, case-insensitively.
+fn parse_mbr(arg: Option<&str>) -> anyhow::Result<Option<bool>> {
+    let Some(a) = arg else { return Ok(None) };
+    match a.to_ascii_lowercase().as_str() {
+        "y" | "yes" => Ok(Some(true)),
+        "n" | "no" => Ok(Some(false)),
+        "a" | "auto" => Ok(None),
+        _ => anyhow::bail!("Unknown option for --mbr: '{a}' (want y, n or a)"),
+    }
+}
+
+/// `--mbr=auto`: dosfstools 4.2 writes the table when `get_device_info()`
+/// says `TYPE_FIXED` and partition 0 — a block device that is a whole disk
+/// (no `partition` in sysfs), not a loop device, not a device-mapper or other
+/// virtual device stacked on others (`slaves` empty), and not `removable`.
+/// An image file, a partition, and anything off Linux, where it learns
+/// nothing from sysfs, get none.
+fn auto_mbr(path: &str) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::{FileTypeExt, MetadataExt};
+        let Ok(meta) = std::fs::metadata(path) else {
+            return false;
+        };
+        if !meta.file_type().is_block_device() {
+            return false;
+        }
+        // glibc's major()/minor().
+        let rdev = meta.rdev();
+        let major = ((rdev >> 8) & 0xfff) | ((rdev >> 32) & 0xffff_f000);
+        let minor = (rdev & 0xff) | ((rdev >> 12) & 0xffff_ff00);
+        let sys = std::path::PathBuf::from(format!("/sys/dev/block/{major}:{minor}"));
+        if !sys.is_dir() || sys.join("partition").exists() || sys.join("loop").exists() {
+            return false;
+        }
+        let stacked = std::fs::read_dir(sys.join("slaves"))
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(false);
+        let removable = std::fs::read_to_string(sys.join("removable"))
+            .ok()
+            .and_then(|s| s.trim().parse::<i32>().ok())
+            .unwrap_or(0);
+        !stacked && removable == 0
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        false
+    }
 }
 
 /// The size to format: `blocks` 1024-byte blocks, or the whole device. A
@@ -161,6 +227,10 @@ async fn main() -> anyhow::Result<()> {
     if args.fixed {
         params.disk_type = mkfs_dos::params::DiskType::Fixed;
     }
+    params.mbr = match parse_mbr(args.mbr.as_deref())? {
+        Some(yes) => yes,
+        None => auto_mbr(&args.device),
+    };
     if let Some(id) = &args.volume_id {
         params.volume_id = Some(parse_hex("volume id", id)?);
     }
@@ -226,6 +296,7 @@ async fn main() -> anyhow::Result<()> {
 
     if args.dry_run {
         print_geometry(&geometry);
+        println!("MBR partition table:  {}", if params.mbr { "yes" } else { "no" });
         println!("\nNothing was written (--dry-run).");
         return Ok(());
     }
@@ -234,8 +305,14 @@ async fn main() -> anyhow::Result<()> {
     // the same numbers; formatting to it writes exactly what was printed.
     let report = format_with(&device, &geometry, &params).await?;
 
+    if report.message_cut_by_mbr {
+        eprintln!("Warning: message too long; truncated");
+    }
     if args.verbose {
         print_geometry(&geometry);
+        if let Some(sig) = report.disk_signature {
+            println!("Adding MBR table:     disk signature {sig:08x}");
+        }
     }
     if !args.quiet {
         println!("{}: {report}", args.device);
@@ -277,6 +354,38 @@ mod tests {
         assert_eq!(parse_hex_u8("media byte", "0xff").unwrap(), 0xff);
         assert!(parse_hex_u8("media byte", "0x1f8").is_err());
         assert!(parse_hex_u8("drive number", "0x180").is_err());
+    }
+
+    // --mbr (#8): mkfs.fat's spellings; a bare --mbr is y; absent is auto.
+    #[test]
+    fn mbr_takes_mkfs_fat_spellings() {
+        assert_eq!(parse_mbr(Some("y")).unwrap(), Some(true));
+        assert_eq!(parse_mbr(Some("YES")).unwrap(), Some(true));
+        assert_eq!(parse_mbr(Some("n")).unwrap(), Some(false));
+        assert_eq!(parse_mbr(Some("No")).unwrap(), Some(false));
+        assert_eq!(parse_mbr(Some("a")).unwrap(), None);
+        assert_eq!(parse_mbr(Some("auto")).unwrap(), None);
+        assert_eq!(parse_mbr(None).unwrap(), None);
+        assert!(parse_mbr(Some("maybe")).is_err());
+
+        let bare = Args::try_parse_from(["mkfs.fat", "--mbr", "img"]).unwrap();
+        assert_eq!(bare.mbr.as_deref(), Some("y"));
+        assert_eq!(bare.device, "img");
+        let off = Args::try_parse_from(["mkfs.fat", "--mbr=n", "img"]).unwrap();
+        assert_eq!(off.mbr.as_deref(), Some("n"));
+        let none = Args::try_parse_from(["mkfs.fat", "img"]).unwrap();
+        assert_eq!(none.mbr, None);
+    }
+
+    // Auto never writes a table on an image file or a non-block device.
+    #[test]
+    fn auto_mbr_is_no_for_a_file() {
+        let path = std::env::temp_dir().join(format!("mkfs-fat-auto-mbr-{}", std::process::id()));
+        std::fs::write(&path, [0u8; 512]).unwrap();
+        assert!(!auto_mbr(path.to_str().unwrap()));
+        std::fs::remove_file(&path).unwrap();
+        assert!(!auto_mbr("/dev/null"));
+        assert!(!auto_mbr("/nonexistent/device"));
     }
 
     // Finding 622740cebc3e: a block count whose byte size overflows is

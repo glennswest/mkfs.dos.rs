@@ -238,6 +238,15 @@ pub struct Params {
     /// place of `This is not a bootable disk`. The raw bytes of the file;
     /// [`crate::structs::BootMessage::encode`] turns them into what is written.
     pub boot_message: Option<Vec<u8>>,
+    /// `--mbr=y`: write a (fake) MBR partition table into the boot sector —
+    /// one active partition covering the whole volume, so Windows recognises
+    /// a whole-disk image. It takes the end of the boot code area, offsets
+    /// 440 to 509, and cuts a `-m` message there. `mkfs.fat`'s default,
+    /// `auto`, depends on what kind of device the target is, which a
+    /// [`crate::BlockDevice`] does not say; the library writes the table only
+    /// when told to, and the `mkfs-fat` CLI resolves `auto` as `mkfs.fat`
+    /// does. See [`crate::structs::FakeMbr`].
+    pub mbr: bool,
 }
 
 impl Params {
@@ -347,6 +356,12 @@ impl Params {
         self
     }
 
+    /// Write a (fake) MBR partition table into the boot sector — `--mbr=y`.
+    pub fn mbr(mut self) -> Self {
+        self.mbr = true;
+        self
+    }
+
     /// Set the creation timestamp, in Unix seconds.
     pub fn create_time(mut self, secs: i64) -> Self {
         self.create_time = Some(secs);
@@ -365,10 +380,7 @@ impl Params {
         if self.invariant {
             return INVARIANT_VOLUME_ID;
         }
-        match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-            Ok(d) => ((d.as_secs() as u32) << 20) | d.subsec_micros(),
-            Err(_) => INVARIANT_VOLUME_ID,
-        }
+        clock_id()
     }
 
     /// The creation timestamp to write, resolving the invariant and clock cases.
@@ -395,6 +407,15 @@ impl Params {
             None => Ok(*NO_NAME),
             Some(label) => encode_label(label),
         }
+    }
+}
+
+/// A 32-bit number from the clock — dosfstools' `generate_volume_id()`:
+/// seconds shifted up by 20, the microseconds underneath.
+pub(crate) fn clock_id() -> u32 {
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => ((d.as_secs() as u32) << 20) | d.subsec_micros(),
+        Err(_) => INVARIANT_VOLUME_ID,
     }
 }
 

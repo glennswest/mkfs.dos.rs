@@ -1,0 +1,12 @@
+mkfs.fat 4.2 (2021-01-31)
+Adding MBR table
+fat16-1g-forced-mbr.img has 64 heads and 63 sectors per track,
+hidden sectors 0x0000;
+logical sector size is 512,
+using 0xf8 media descriptor, with 2097144 sectors;
+drive number 0x80;
+filesystem has 2 16-bit FATs and 32 sectors per cluster.
+FAT size is 256 sectors, and provides 65517 clusters.
+There are 32 reserved sectors.
+Root directory contains 512 slots and uses 32 sectors.
+Volume ID is 1234abcd, no volume label.

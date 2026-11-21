@@ -22,6 +22,7 @@ use crate::structs::boot::{
 };
 use crate::structs::dirent::{Attributes, DirEntry, DosTime, DELETED_FLAG, KANJI_LEAD};
 use crate::structs::fsinfo::FsInfo;
+use crate::structs::mbr::FakeMbr;
 
 /// What a format produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +49,12 @@ pub struct Report {
     pub label: Option<String>,
     /// Bytes of usable space.
     pub data_bytes: u64,
+    /// The disk signature of the MBR partition table written with
+    /// [`Params::mbr`], or `None` when no table was written.
+    pub disk_signature: Option<u32>,
+    /// A `-m` message ran into the MBR table and was cut at offset 439 —
+    /// `mkfs.fat` prints `Warning: message too long; truncated`.
+    pub message_cut_by_mbr: bool,
     /// The geometry, in full.
     pub geometry: Geometry,
 }
@@ -94,6 +101,33 @@ pub async fn format_with<D: BlockDevice>(
     let bs = build_boot_sector(geometry, params, label, volume_id)?;
     let ss = geometry.sector_size as u64;
 
+    // `--mbr`: the disk signature. `--invariant` uses the volume serial; else
+    // the one already on the device is kept, as `mkfs.fat` keeps it, so a
+    // reformatted disk stays the same disk to Windows; else a fresh one. It
+    // has to be read now, before the reserved area is cleared. A read that
+    // fails is no signature, as it is there.
+    let mbr = if params.mbr {
+        let disk_signature = if params.invariant {
+            volume_id
+        } else {
+            let mut old = vec![0u8; geometry.sector_size.max(512) as usize];
+            let existing = match device.read_at(0, &mut old).await {
+                Ok(()) => FakeMbr::existing_signature(&old),
+                Err(_) => None,
+            };
+            existing.unwrap_or_else(crate::params::clock_id)
+        };
+        Some(FakeMbr::for_volume(
+            geometry.fat_type,
+            geometry.total_sectors,
+            geometry.heads,
+            geometry.sectors_per_track,
+            disk_signature,
+        ))
+    } else {
+        None
+    };
+
     // The whole reserved area goes to zero first. The boot sector and its
     // companions land on top of it — writing them without clearing what was
     // there would leave a previous filesystem's FSInfo sector behind, and a
@@ -103,6 +137,13 @@ pub async fn format_with<D: BlockDevice>(
 
     let mut sector = vec![0u8; geometry.sector_size as usize];
     bs.encode(&mut sector);
+    // The table goes into sector 0 itself, so the FAT32 backup boot sector,
+    // written from this same buffer, carries it too — as it does from
+    // `mkfs.fat`, which copies the whole `bs`.
+    let message_cut_by_mbr = match &mbr {
+        Some(table) => table.encode(&mut sector),
+        None => false,
+    };
     device.write_at(0, &sector).await?;
 
     if geometry.fat_type == FatType::Fat32 {
@@ -191,6 +232,8 @@ pub async fn format_with<D: BlockDevice>(
             Some(crate::bytes::field_to_string(&label))
         },
         data_bytes: geometry.data_bytes(),
+        disk_signature: mbr.map(|t| t.disk_signature),
+        message_cut_by_mbr,
         geometry: geometry.clone(),
     })
 }
@@ -431,5 +474,56 @@ mod tests {
         let first = dev.to_vec();
         format(&dev, &params).await.unwrap();
         assert_eq!(first, dev.to_vec());
+    }
+
+    // --mbr (#8): one active entry over the whole volume, in sector 0 and in
+    // the FAT32 backup, and the volume still reads as itself.
+    #[tokio::test]
+    async fn an_mbr_table_is_written_and_the_volume_still_opens() {
+        let (dev, report) = make(1024 * MIB, &Params::new().invariant().mbr()).await;
+        let image = dev.to_vec();
+        assert_eq!(report.disk_signature, Some(crate::params::INVARIANT_VOLUME_ID));
+        assert_eq!(&image[440..444], &0x1234_abcdu32.to_le_bytes());
+        assert_eq!(image[446], 0x80);
+        assert_eq!(image[450], 0x0c);
+        assert_eq!(&image[454..458], &[0, 0, 0, 0]);
+        assert_eq!(&image[458..462], &report.total_sectors.to_le_bytes());
+        assert_eq!(&image[510..512], &[0x55, 0xaa]);
+        let bs = BootSector::decode(&image).unwrap();
+        assert_eq!(bs.fat_type(), FatType::Fat32);
+        let b = bs.backup_boot as usize * 512;
+        assert_eq!(&image[..512], &image[b..b + 512]);
+
+        let (dev, report) = make(64 * MIB, &Params::new().invariant()).await;
+        assert_eq!(report.disk_signature, None);
+        assert!(dev.to_vec()[440..510].iter().all(|&b| b == 0));
+    }
+
+    // mkfs.fat keeps the disk signature already on the device, unless
+    // --invariant pins it to the serial number.
+    #[tokio::test]
+    async fn reformatting_keeps_the_disk_signature() {
+        let dev = MemDevice::new(64 * MIB);
+        let first = format(&dev, &Params::new().mbr()).await.unwrap();
+        let sig = first.disk_signature.unwrap();
+        assert_ne!(sig, 0);
+        let again = format(&dev, &Params::new().mbr().volume_id(7)).await.unwrap();
+        assert_eq!(again.disk_signature, Some(sig));
+        assert_eq!(&dev.to_vec()[440..444], &sig.to_le_bytes());
+        let pinned = format(&dev, &Params::new().mbr().invariant()).await.unwrap();
+        assert_eq!(pinned.disk_signature, Some(crate::params::INVARIANT_VOLUME_ID));
+    }
+
+    // A -m message that runs past offset 439 is cut there.
+    #[tokio::test]
+    async fn an_mbr_cuts_a_long_message() {
+        let long = vec![b'x'; 600];
+        let (dev, report) = make(16 * MIB, &Params::new().boot_message(long).mbr()).await;
+        assert!(report.message_cut_by_mbr);
+        let image = dev.to_vec();
+        assert_eq!(image[438], b'x');
+        assert_eq!(image[439], 0);
+        let (_, report) = make(16 * MIB, &Params::new().boot_message(&b"hi"[..]).mbr()).await;
+        assert!(!report.message_cut_by_mbr);
     }
 }
