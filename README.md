@@ -66,8 +66,7 @@ in a binary name, so they are `mkfs-fat` and `fsck-fat`; install them as
 
 ```sh
 cargo install --git https://github.com/glennswest/mkfs.dos.rs --tag v0.1.0
-truncate -s 512M esp.img      # mkfs-fat formats an existing file or device; it has no -C
-mkfs-fat -F 32 -n EFI esp.img
+mkfs-fat -C -F 32 -n EFI esp.img 524288   # -C creates the 512 MiB file first
 fsck-fat -v esp.img
 ```
 
@@ -91,6 +90,8 @@ whole device. Flags follow `mkfs.fat` where they mean the same thing:
 | `-b N` | backup boot sector (FAT32) | 6, if the reserved area has room |
 | `-m FILE` | boot-sector message, printed if the volume is booted; `-` reads standard input. Encoded as `mkfs.fat` does (CR and NUL dropped, LF → CR LF, tabs to 8 columns) and cut at 447 bytes, 419 on FAT32, with `Warning: message too long; truncated`. A file that cannot be read stops the format (`mkfs.fat` warns and keeps the default) | `This is not a bootable disk…` |
 | `--mbr[=y\|n\|a]` | write a (fake) MBR partition table into the boot sector — one active partition from LBA 0 over the whole volume, disk signature at 440, so Windows recognises a whole-disk image. Type byte and CHS as `mkfs.fat 4.2` picks them (`0x01`, `0x04`, `0x06`, `0x0e`, `0x0c`); the disk signature already on the device is kept, `--invariant` makes it the serial. Takes offsets 440–509, so a `-m` message is cut at 439 bytes with `Warning: message too long; truncated`. A bare `--mbr` is `y`; the value needs `=` | `a`: only on a fixed whole-disk block device (Linux sysfs: not a partition, loop, stacked or removable device), as `mkfs.fat` decides; never on an image file |
+| `-a` | do not align structures to cluster boundaries | aligned |
+| `-C` | create DEVICE as a new file of BLOCKS × 1024 bytes, then format it, as `mkfs.fat -C` does (`O_EXCL`, mode `0666` less the umask). BLOCKS is required (`Need intended size with -C.`); an existing file is refused (`file … already exists`) and left untouched. A file created this way stays if the format then fails, as with `mkfs.fat` | off: DEVICE must exist |
 | `-A` / `--variant standard\|atari` | the Atari ST (GEMDOS) variant, as `mkfs.fat 4.2` writes it: `60 1c 'm'` where the x86 jump goes, `kdosf` plus the low 24 bits of the serial as the OEM name, no extended boot record (only the drive number), no boot code, no `0xAA55`, and the label in the root directory only. Geometry by GEMDOS's rules: FAT12 only at 1440/2400/2880/5760 sectors, else FAT16 (FAT32 from 512 MiB), two-sector clusters, no cluster alignment, and *logical* sectors doubled until there are at most 65531 and the FAT fits — up to 16 KiB, so 512 MiB is the largest; a sector size given with `-S` (or a block device's own) is kept and the format refused if it does not fit. `-A` toggles, `--variant` sets; the last on the line wins. `fsck-fat` cannot open the result yet: it wants `0xAA55` (#21) | standard |
 | `-I` | format a whole disk that has partitions on it, or a device something is mapped onto (Linux sysfs: a partition child not starting at 0, or a `holders` entry); without it that is refused, as `mkfs.fat` refuses it | refuse |
 | `--fixed` | treat the target as a fixed disk, so floppy defaults never apply (not in `mkfs.fat`, which asks the kernel) | removable, as `mkfs.fat` treats a file |

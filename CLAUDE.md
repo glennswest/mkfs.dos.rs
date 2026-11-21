@@ -61,7 +61,7 @@ component (no container, port or config). The CLI flags and their divergences
 from `mkfs.fat` (`-H` for hidden sectors, `--fixed`, `--dry-run`) are tabled in README,
 with `--mbr`, whose `auto` reads Linux sysfs as `mkfs.fat` does.
 The `mkfs.fat` flags not built are absent from the CLI (unknown flag) and
-each is a `gap` issue: #6 `-C`, #7 `-c`/`-l`, #9 `--offset`,
+each is a `gap` issue: #7 `-c`/`-l`, #9 `--offset`,
 #11 `--codepage` (`-I`, `-A`, `--variant` are built).
 
 ## Work plan
@@ -142,7 +142,11 @@ each is a `gap` issue: #6 `-C`, #7 `-c`/`-l`, #9 `--offset`,
       refused and BPB fields narrowed with `u16::try_from`; one test each;
       sc-build 81153a1 passed (96 lib + 6 mkfs-fat unit tests, 33 goldens
       byte-identical, clippy clean)
-- [ ] #6 `-C`, #9 `--offset`
+- [ ] #6 `-C` (2026-11-21): `create_image` after dosfstools 4.2 (`O_EXCL`,
+      0666, `ftruncate` to BLOCKS × 1024; BLOCKS required). Output is the
+      truncated-file golden: `make-golden.sh` `cmp`s real `mkfs.fat -C`
+      against it, and `tests/cli_create.rs` runs `mkfs-fat -C` against it
+- [ ] #9 `--offset`
 - [x] #5 — README stub line listing unbuilt flags removed; the missing flags
       were already absent from the CLI; each filed as a `gap` issue (2026-11-19)
 - [x] #1 — kernel verification runnable without a local build or root

@@ -3,6 +3,15 @@
 ## [Unreleased]
 
 ### 2026-11-21
+- **feat:** `mkfs-fat -C DEVICE BLOCKS` creates DEVICE as a new file of
+  BLOCKS × 1024 bytes and formats it, as `mkfs.fat -C` does: `O_EXCL`, mode
+  `0666`, BLOCKS required (`Need intended size with -C.`), an existing file
+  refused (`file … already exists`) and untouched. The image is
+  byte-identical to `mkfs.fat`'s (`tests/cli_create.rs` against the
+  goldens; `make-golden.sh` checks real `mkfs.fat -C` gives the same bytes
+  as a truncated file) (#6).
+- **docs:** README's flag table has its `-a` row back; the `-A` row had
+  replaced it (#11).
 - **fix:** `format_with` validates the geometry it is handed before its
   first read or write: new `Geometry::validate(device_size,
   device_sector_size)`. A geometry for a larger device (1 GiB on 64 MiB),
