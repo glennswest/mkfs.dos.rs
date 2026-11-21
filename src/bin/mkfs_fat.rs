@@ -108,8 +108,16 @@ struct Args {
 
     /// Toggle the Atari variant of the filesystem: GEMDOS's boot sector and
     /// geometry. Each `-A` flips it, as in `mkfs.fat`.
-    #[arg(short = 'A', action = clap::ArgAction::Count)]
-    atari: u8,
+    // Append with no value, not Count: Count keeps only the last
+    // occurrence's index, and the order of every `-A` is what matters.
+    #[arg(
+        short = 'A',
+        action = clap::ArgAction::Append,
+        num_args = 0,
+        default_missing_value = "toggle",
+        hide_default_value = true
+    )]
+    atari: Vec<String>,
 
     /// The variant of filesystem: `standard` or `atari`. With `-A` the last
     /// one on the command line wins, as in `mkfs.fat`.
@@ -170,11 +178,9 @@ fn parse_mbr(arg: Option<&str>) -> anyhow::Result<Option<bool>> {
 /// each `--variant`, so whichever comes last decides.
 fn resolve_variant(matches: &ArgMatches) -> anyhow::Result<Variant> {
     let mut events: Vec<(usize, Option<Variant>)> = Vec::new();
-    // A count's default `0` has an index too; only occurrences count.
-    if matches.value_source("atari") == Some(clap::parser::ValueSource::CommandLine) {
-        if let Some(idx) = matches.indices_of("atari") {
-            events.extend(idx.map(|i| (i, None)));
-        }
+    // One index per `-A`: each occurrence appends one value.
+    if let Some(idx) = matches.indices_of("atari") {
+        events.extend(idx.map(|i| (i, None)));
     }
     if let (Some(idx), Some(vals)) = (
         matches.indices_of("variant"),
