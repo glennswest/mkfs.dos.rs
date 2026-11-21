@@ -26,7 +26,10 @@ println!("{report}");
 ```
 
 The library is `format` (or `Geometry::compute` then `format_with`, to see the
-geometry before anything is written), `check` with `FsckOptions`, and
+geometry before anything is written; `format_with` runs `Geometry::validate`
+against the device first, and refuses a geometry that is too big for it, made
+for smaller sectors, or not expressible in the boot sector, writing nothing),
+`check` with `FsckOptions`, and
 `Filesystem` for reading a volume back. `FileDevice` formats a file or a block
 device; `MemDevice` formats a buffer. Library consumers who do not want the CLI
 dependencies take it with `default-features = false`.
