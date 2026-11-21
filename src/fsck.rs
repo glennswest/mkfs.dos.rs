@@ -1230,7 +1230,8 @@ mod tests {
     // through it.
     #[tokio::test]
     async fn metadata_pointers_outside_the_reserved_area_are_never_written() {
-        let cases: [(&str, fn(&mut BootSector)); 3] = [
+        type Edit = fn(&mut BootSector);
+        let cases: [(&str, Edit); 3] = [
             // The first FAT.
             ("backup-boot-pointer", |b| b.backup_boot = b.reserved_sectors),
             // Deep in the data area.
