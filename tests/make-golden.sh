@@ -49,6 +49,17 @@ CASES=(
     "fat16-16m-msg-long:16384:-m $GOLDEN/msg-long.txt"
     "fat32-512m-msg:524288:-m $GOLDEN/msg-short.txt"
     "fat32-512m-msg-long:524288:-m $GOLDEN/msg-long.txt"
+    # --mbr=y (#8): one case per partition type mkfs.fat picks — 0x01 FAT12,
+    # 0x04 FAT16 under 65536 sectors, 0x06 within CHS, 0x0e past it or with
+    # heads over 254, 0x0c FAT32 — and a long message cut at 439 by the table.
+    "fat12-1440k-mbr:1440:--mbr=y"
+    "fat16-16m-mbr:16384:--mbr=y"
+    "fat16-64m-mbr:65536:--mbr=y"
+    "fat16-64m-mbr-geom:65536:-g 255/63 --mbr=y"
+    "fat16-1g-forced-mbr:1048576:-F 16 --mbr=y"
+    "fat32-1g-mbr:1048576:--mbr=y"
+    "fat16-16m-msg-long-mbr:16384:-m $GOLDEN/msg-long.txt --mbr=y"
+    "fat32-512m-msg-long-mbr:524288:-m $GOLDEN/msg-long.txt --mbr=y"
 )
 
 for case in "${CASES[@]}"; do
