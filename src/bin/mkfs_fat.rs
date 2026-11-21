@@ -114,8 +114,7 @@ struct Args {
         short = 'A',
         action = clap::ArgAction::Append,
         num_args = 0,
-        default_missing_value = "toggle",
-        hide_default_value = true
+        default_missing_value = "toggle"
     )]
     atari: Vec<String>,
 
