@@ -88,7 +88,8 @@ whole device. Flags follow `mkfs.fat` where they mean the same thing:
 | `-b N` | backup boot sector (FAT32) | 6, if the reserved area has room |
 | `-m FILE` | boot-sector message, printed if the volume is booted; `-` reads standard input. Encoded as `mkfs.fat` does (CR and NUL dropped, LF → CR LF, tabs to 8 columns) and cut at 447 bytes, 419 on FAT32, with `Warning: message too long; truncated`. A file that cannot be read stops the format (`mkfs.fat` warns and keeps the default) | `This is not a bootable disk…` |
 | `--mbr[=y\|n\|a]` | write a (fake) MBR partition table into the boot sector — one active partition from LBA 0 over the whole volume, disk signature at 440, so Windows recognises a whole-disk image. Type byte and CHS as `mkfs.fat 4.2` picks them (`0x01`, `0x04`, `0x06`, `0x0e`, `0x0c`); the disk signature already on the device is kept, `--invariant` makes it the serial. Takes offsets 440–509, so a `-m` message is cut at 439 bytes with `Warning: message too long; truncated`. A bare `--mbr` is `y`; the value needs `=` | `a`: only on a fixed whole-disk block device (Linux sysfs: not a partition, loop, stacked or removable device), as `mkfs.fat` decides; never on an image file |
-| `-a` | do not align structures to cluster boundaries | aligned |
+| `-A` / `--variant standard\|atari` | the Atari ST (GEMDOS) variant, as `mkfs.fat 4.2` writes it: `60 1c 'm'` where the x86 jump goes, `kdosf` plus the low 24 bits of the serial as the OEM name, no extended boot record (only the drive number), no boot code, no `0xAA55`, and the label in the root directory only. Geometry by GEMDOS's rules: FAT12 only at 1440/2400/2880/5760 sectors, else FAT16 (FAT32 from 512 MiB), two-sector clusters, no cluster alignment, and *logical* sectors doubled until there are at most 65531 and the FAT fits — up to 16 KiB, so 512 MiB is the largest; a sector size given with `-S` (or a block device's own) is kept and the format refused if it does not fit. `-A` toggles, `--variant` sets; the last on the line wins. `fsck-fat` cannot open the result: it wants `0xAA55` | standard |
+| `-I` | format a whole disk that has partitions on it, or a device something is mapped onto (Linux sysfs: a partition child not starting at 0, or a `holders` entry); without it that is refused, as `mkfs.fat` refuses it | refuse |
 | `--fixed` | treat the target as a fixed disk, so floppy defaults never apply (not in `mkfs.fat`, which asks the kernel) | removable, as `mkfs.fat` treats a file |
 | `--invariant` | fixed serial and timestamps, for reproducible images | off |
 | `--dry-run` | print the geometry and write nothing (not in `mkfs.fat`) | off |
@@ -217,7 +218,7 @@ no root, no dosfstools needed.
 
 ## Golden comparison
 
-`cargo test --release --test golden_compare` (also part of plain `cargo test`) decompresses twenty-four images made by
+`cargo test --release --test golden_compare` (also part of plain `cargo test`) decompresses thirty-three images made by
 `mkfs.fat 4.2` and requires ours to be identical, byte for byte:
 
 | | |
@@ -230,6 +231,7 @@ no root, no dosfstools needed.
 | 1 GiB | FAT32, with a label, and with 4 KiB sectors |
 | 1440 KiB, 16 MiB, 512 MiB | `-m FILE`: a message with tabs, CRs, blank lines and a NUL (FAT12, FAT32), and one too long for the boot code (FAT16, FAT32) |
 | 1440 KiB to 1 GiB | `--mbr=y`: each partition type `mkfs.fat` picks — `0x01` FAT12, `0x04` FAT16 under 65536 sectors, `0x06` within CHS reach, `0x0e` past it (`-F 16` at 1 GiB) and with `-g 255/63`, `0x0c` FAT32 — and a long `-m` message cut at 439 by the table (FAT16, FAT32) |
+| 720 KiB to 512 MiB | `-A` / `--variant atari`: the 720 KiB and 1.44 MB floppies (FAT12), FAT16 at 16 and 64 MiB (2 KiB logical sectors at 64), with a label, `-F 12` at 8 MiB (a FAT too big, so 2 KiB sectors), `-S 2048` held, FAT32 at 512 MiB on 16 KiB sectors, and `--mbr=y` |
 
 Regenerate them with `tests/make-golden.sh` on a host with dosfstools, as an
 ordinary user. With dev retired, that host is a build VM:

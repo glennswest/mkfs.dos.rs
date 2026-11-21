@@ -1,0 +1,11 @@
+mkfs.fat 4.2 (2021-01-31)
+atari-8m-f12.img has 2 heads and 32 sectors per track,
+hidden sectors 0x0000;
+logical sector size is 2048,
+using 0xf8 media descriptor, with 4096 sectors;
+drive number 0x80;
+filesystem has 2 12-bit FATs and 2 sectors per cluster.
+FAT size is 2 sectors, and provides 2041 clusters.
+There is 1 reserved sector.
+Root directory contains 512 slots and uses 8 sectors.
+Volume ID is 0034abcd, no volume label.

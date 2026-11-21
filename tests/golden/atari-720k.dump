@@ -1,0 +1,11 @@
+mkfs.fat 4.2 (2021-01-31)
+atari-720k.img has 2 heads and 9 sectors per track,
+hidden sectors 0x0000;
+logical sector size is 512,
+using 0xf9 media descriptor, with 1440 sectors;
+drive number 0x00;
+filesystem has 2 12-bit FATs and 2 sectors per cluster.
+FAT size is 3 sectors, and provides 713 clusters.
+There is 1 reserved sector.
+Root directory contains 112 slots and uses 7 sectors.
+Volume ID is 0034abcd, no volume label.

@@ -166,6 +166,57 @@ const CASES: &[Case] = &[
         size: 512 * MIB,
         params: || Params::new().invariant().boot_message(MSG_LONG).mbr(),
     },
+    // `-A` / `--variant atari` (#11): the GEMDOS boot sector (68000 branch,
+    // `kdosf` and a 24-bit serial, no extended boot record, no 0xAA55) and
+    // its geometry — FAT12 only on the floppy sector counts, two-sector
+    // clusters, logical sectors doubled past 65531 sectors (2 KiB at 64 MiB,
+    // 16 KiB on the 512 MiB FAT32) or past a FAT too big for its entries
+    // (`-F 12` at 8 MiB), held by `-S`; a label in the root only; a fake MBR.
+    Case {
+        name: "atari-720k",
+        size: 720 * KIB,
+        params: || Params::new().invariant().atari(),
+    },
+    Case {
+        name: "atari-1440k",
+        size: 1440 * KIB,
+        params: || Params::new().invariant().atari(),
+    },
+    Case {
+        name: "atari-16m",
+        size: 16 * MIB,
+        params: || Params::new().invariant().atari(),
+    },
+    Case {
+        name: "atari-64m",
+        size: 64 * MIB,
+        params: || Params::new().invariant().atari(),
+    },
+    Case {
+        name: "atari-64m-label",
+        size: 64 * MIB,
+        params: || Params::new().invariant().atari().label("GEMDOS"),
+    },
+    Case {
+        name: "atari-8m-f12",
+        size: 8 * MIB,
+        params: || Params::new().invariant().atari().fat_type(FatType::Fat12),
+    },
+    Case {
+        name: "atari-32m-s2048",
+        size: 32 * MIB,
+        params: || Params::new().invariant().atari().sector_size(2048),
+    },
+    Case {
+        name: "atari-512m",
+        size: 512 * MIB,
+        params: || Params::new().invariant().atari(),
+    },
+    Case {
+        name: "atari-16m-mbr",
+        size: 16 * MIB,
+        params: || Params::new().invariant().atari().mbr(),
+    },
 ];
 
 /// The message files `tests/make-golden.sh` hands `mkfs.fat -m`.

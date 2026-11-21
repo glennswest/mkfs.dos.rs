@@ -1,0 +1,12 @@
+mkfs.fat 4.2 (2021-01-31)
+Auto-selecting FAT32 for large filesystem
+Warning: More than 32765 sector need TOS 1.04 or higher.
+atari-512m.img has 32 heads and 63 sectors per track,
+hidden sectors 0x0000;
+logical sector size is 16384,
+using 0xf8 media descriptor, with 32767 sectors;
+drive number 0x80;
+filesystem has 2 32-bit FATs and 2 sectors per cluster.
+FAT size is 4 sectors, and provides 16363 clusters.
+There are 32 reserved sectors.
+Volume ID is 0034abcd, no volume label.

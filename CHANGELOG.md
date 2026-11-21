@@ -3,6 +3,23 @@
 ## [Unreleased]
 
 ### 2026-11-21
+- **feat:** `mkfs-fat -A` / `--variant standard|atari` and `Params::atari`
+  (`Params::variant`, `Geometry::variant`, `mkfs_dos::Variant`) write the
+  Atari ST (GEMDOS) variant as `mkfs.fat 4.2` does: `60 1c 'm'` jump,
+  `kdosf` + 24-bit serial as the OEM name, no extended boot record but the
+  drive number, no boot code, no `0xAA55`, label in the root only, FAT32
+  root chain ended `0x0fffffff`. Geometry from the Atari branch of
+  `setup_tables()`: FAT12 only at the floppy sector counts, two-sector
+  clusters, no alignment, logical sectors doubled to at most 65531 sectors
+  and 16 KiB; `-S` (and a block device's own sector size) held. `-A`
+  toggles and `--variant` sets in command-line order. Nine new golden
+  images, byte-identical (#11).
+- **feat:** `mkfs-fat` refuses a whole disk with partitions on it, or a
+  device with holders, as `mkfs.fat` does (`Partitions or virtual mappings on
+  device …`); `-I` overrides (#11).
+- **fix:** the `sector size > 4096` warning is about the sector size asked
+  for (or the device's), not the geometry's, so the Atari search's enlarged
+  logical sectors do not set it off.
 - **fix:** `Filesystem::set_fat_entry` holds a per-handle async lock across
   its whole read-modify-write, over every FAT copy. Two tasks updating
   neighbouring FAT12 entries, which share a byte, no longer lose one link or

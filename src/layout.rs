@@ -16,7 +16,9 @@
 
 use crate::bytes::cdiv;
 use crate::error::{Error, Result};
-use crate::params::{DiskType, FatType, Params};
+use crate::params::{
+    DiskType, FatType, Params, Variant, GEMDOS_MAX_SECTORS, GEMDOS_MAX_SECTOR_SIZE,
+};
 
 /// A resolved filesystem geometry: every number the boot sector needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,8 +60,11 @@ pub struct Geometry {
     pub backup_boot: u16,
     /// FAT32: first cluster of the root directory.
     pub root_cluster: u32,
-    /// Whether structures were aligned to cluster boundaries.
+    /// Whether structures were aligned to cluster boundaries. Never on the
+    /// Atari variant, which aligns nothing but the track.
     pub aligned: bool,
+    /// The PC or the Atari boot sector.
+    pub variant: Variant,
 }
 
 impl Geometry {
@@ -99,7 +104,7 @@ impl Geometry {
     /// `device_sector_size` is what the device reports; [`Params::sector_size`]
     /// may raise it but never lower it below what the hardware will accept.
     pub fn compute(size_bytes: u64, device_sector_size: u32, params: &Params) -> Result<Self> {
-        let sector_size = resolve_sector_size(device_sector_size, params)?;
+        let mut sector_size = resolve_sector_size(device_sector_size, params)?;
         let num_fats = params.num_fats.unwrap_or(2);
         if num_fats == 0 {
             return Err(Error::invalid("a filesystem needs at least one FAT"));
@@ -223,70 +228,59 @@ impl Geometry {
 
         let mut root_dir_sectors = cdiv(root_entries as u64 * 32, sector_size as u64) as u32;
 
-        // Below 8192 sectors — a floppy, near enough — alignment costs a
-        // noticeable share of the volume and buys nothing, so it comes off.
-        if num_sectors <= 8192 {
+        // Atari: GEMDOS's own branch of `setup_tables()` — its own width rule,
+        // two-sector clusters, larger logical sectors instead of larger
+        // clusters, and no cluster alignment.
+        let (fat_type, cluster_size, cluster_count, fat_length) = if params.variant == Variant::Atari {
+            if fat_type != Some(FatType::Fat32) && hidden_sectors > 0xffff {
+                return Err(Error::invalid(
+                    "#hidden doesn't fit in 16bit field of Atari format",
+                ));
+            }
             aligned = false;
-        }
-
-        let max_cluster_size: u32 = params.sectors_per_cluster.map(u32::from).unwrap_or(128);
-        let candidates;
-
-        loop {
-            let round = Candidates::compute(
+            let a = atari_search(
+                num_sectors,
+                sector_size,
+                params.sector_size.is_some(),
+                fat_type,
+                params.sectors_per_cluster,
+                num_fats,
+                reserved_sectors,
+                root_entries,
+            )?;
+            num_sectors = a.num_sectors;
+            sector_size = a.sector_size;
+            root_dir_sectors = cdiv(root_entries as u64 * 32, sector_size as u64) as u32;
+            (a.fat_type, a.cluster_size, a.cluster_count, a.fat_length)
+        } else {
+            // Below 8192 sectors — a floppy, near enough — alignment costs a
+            // noticeable share of the volume and buys nothing, so it comes off.
+            if num_sectors <= 8192 {
+                aligned = false;
+            }
+            let (fat_type, cluster_size, cluster_count, fat_length) = standard_search(
                 num_sectors,
                 sector_size,
                 cluster_size,
+                fat_type,
+                params,
                 num_fats,
                 reserved_sectors,
                 root_dir_sectors,
                 aligned,
-                params.fat_type == Some(FatType::Fat32),
-            );
+            )?;
 
-            let done = match fat_type {
-                None => round.clust12 > 0 || round.clust16 > 0,
-                Some(FatType::Fat12) => round.clust12 > 0,
-                Some(FatType::Fat16) => round.clust16 > 0,
-                Some(FatType::Fat32) => round.clust32 > 0,
-            };
-            if done {
-                candidates = round;
-                break;
+            // The reserved area and the root directory are rounded up so the
+            // data area starts on a cluster boundary. The FAT lengths were
+            // already rounded inside the search, so the whole prefix is now
+            // aligned.
+            reserved_sectors = align_object(reserved_sectors, cluster_size, aligned);
+            if aligned && root_dir_sectors > 0 {
+                root_dir_sectors = align_object(root_dir_sectors, cluster_size, aligned);
+                root_entries = root_dir_sectors * (sector_size / 32);
             }
-
-            cluster_size <<= 1;
-            if cluster_size == 0 || cluster_size > max_cluster_size || cluster_size > 128 {
-                return Err(no_geometry(fat_type, num_sectors as u64, &round));
-            }
-        }
-
-        // Nothing above chose between FAT12 and FAT16: whichever yields more
-        // clusters wins, which is `mkfs.fat`'s rule and amounts to "use the
-        // smaller entry only when it can address the whole volume".
-        let fat_type = fat_type.unwrap_or(if candidates.clust16 > candidates.clust12 {
-            FatType::Fat16
-        } else {
-            FatType::Fat12
-        });
-
-        let (cluster_count, fat_length) = match fat_type {
-            FatType::Fat12 => (candidates.clust12, candidates.fatlength12),
-            FatType::Fat16 => (candidates.clust16, candidates.fatlength16),
-            FatType::Fat32 => (candidates.clust32, candidates.fatlength32),
+            (fat_type, cluster_size, cluster_count, fat_length)
         };
-        if cluster_count == 0 {
-            return Err(no_geometry(Some(fat_type), num_sectors as u64, &candidates));
-        }
-
-        // The reserved area and the root directory are rounded up so the data
-        // area starts on a cluster boundary. The FAT lengths were already
-        // rounded inside the search, so the whole prefix is now aligned.
-        reserved_sectors = align_object(reserved_sectors, cluster_size, aligned);
-        if aligned && root_dir_sectors > 0 {
-            root_dir_sectors = align_object(root_dir_sectors, cluster_size, aligned);
-            root_entries = root_dir_sectors * (sector_size / 32);
-        }
 
         let (info_sector, backup_boot, root_cluster) = if fat_type == FatType::Fat32 {
             let info_sector = params.info_sector.unwrap_or(1);
@@ -336,6 +330,7 @@ impl Geometry {
             backup_boot,
             root_cluster,
             aligned,
+            variant: params.variant,
         };
 
         // `mkfs.fat`'s last check, and it is worth keeping in its own units:
@@ -356,6 +351,193 @@ impl Geometry {
 
         Ok(geom)
     }
+}
+
+/// One pass over cluster sizes for the PC variant: the `do … while` in
+/// `setup_tables()`. Returns the width, cluster size, cluster count and FAT
+/// length it settles on.
+#[allow(clippy::too_many_arguments)]
+fn standard_search(
+    num_sectors: u32,
+    sector_size: u32,
+    mut cluster_size: u32,
+    fat_type: Option<FatType>,
+    params: &Params,
+    num_fats: u8,
+    reserved_sectors: u32,
+    root_dir_sectors: u32,
+    aligned: bool,
+) -> Result<(FatType, u32, u32, u32)> {
+    let max_cluster_size: u32 = params.sectors_per_cluster.map(u32::from).unwrap_or(128);
+    let candidates;
+
+    loop {
+        let round = Candidates::compute(
+            num_sectors,
+            sector_size,
+            cluster_size,
+            num_fats,
+            reserved_sectors,
+            root_dir_sectors,
+            aligned,
+            params.fat_type == Some(FatType::Fat32),
+        );
+
+        let done = match fat_type {
+            None => round.clust12 > 0 || round.clust16 > 0,
+            Some(FatType::Fat12) => round.clust12 > 0,
+            Some(FatType::Fat16) => round.clust16 > 0,
+            Some(FatType::Fat32) => round.clust32 > 0,
+        };
+        if done {
+            candidates = round;
+            break;
+        }
+
+        cluster_size <<= 1;
+        if cluster_size == 0 || cluster_size > max_cluster_size || cluster_size > 128 {
+            return Err(no_geometry(fat_type, num_sectors as u64, &round));
+        }
+    }
+
+    // Nothing above chose between FAT12 and FAT16: whichever yields more
+    // clusters wins, which is `mkfs.fat`'s rule and amounts to "use the
+    // smaller entry only when it can address the whole volume".
+    let fat_type = fat_type.unwrap_or(if candidates.clust16 > candidates.clust12 {
+        FatType::Fat16
+    } else {
+        FatType::Fat12
+    });
+
+    let (cluster_count, fat_length) = match fat_type {
+        FatType::Fat12 => (candidates.clust12, candidates.fatlength12),
+        FatType::Fat16 => (candidates.clust16, candidates.fatlength16),
+        FatType::Fat32 => (candidates.clust32, candidates.fatlength32),
+    };
+    if cluster_count == 0 {
+        return Err(no_geometry(Some(fat_type), num_sectors as u64, &candidates));
+    }
+    Ok((fat_type, cluster_size, cluster_count, fat_length))
+}
+
+/// What the Atari search settles on.
+struct AtariGeometry {
+    fat_type: FatType,
+    sector_size: u32,
+    num_sectors: u32,
+    cluster_size: u32,
+    cluster_count: u32,
+    fat_length: u32,
+}
+
+/// The Atari branch of dosfstools 4.2 `setup_tables()` (`else` of
+/// `if (!atari_format)`), statement for statement.
+///
+/// GEMDOS uses FAT12 on floppies and FAT16 on hard disks, so with no `-F` the
+/// width is FAT12 exactly at the four floppy sector counts and FAT16
+/// otherwise — no cluster-count rule, and no FAT16 minimum. Clusters are two
+/// sectors unless `-s` says otherwise; to fit, the *logical* sector size
+/// doubles (and the sector count halves, an odd sector lost each time) until
+/// there are at most [`GEMDOS_MAX_SECTORS`] sectors and the FAT can address
+/// every cluster — unless the sector size was given, when it is refused.
+///
+/// The arithmetic is C's: `size_fat / 8` and `nr_fats * size_fat / 8` are
+/// integer divisions (one FAT12 FAT counts as one byte per entry pair), and
+/// the unsigned subtractions wrap, which is reproduced with wrapping
+/// arithmetic so that the edge cases fail where they fail there.
+#[allow(clippy::too_many_arguments)]
+fn atari_search(
+    mut num_sectors: u32,
+    mut sector_size: u32,
+    sector_size_set: bool,
+    fat_type: Option<FatType>,
+    sectors_per_cluster: Option<u8>,
+    num_fats: u8,
+    reserved_sectors: u32,
+    root_entries: u32,
+) -> Result<AtariGeometry> {
+    let fat_type = fat_type.unwrap_or(if matches!(num_sectors, 1440 | 2400 | 2880 | 5760) {
+        FatType::Fat12
+    } else {
+        FatType::Fat16
+    });
+    let size_fat = fat_type.bits() as i64;
+    let nr_fats = num_fats as i64;
+    let cluster_size = sectors_per_cluster.map(u32::from).unwrap_or(2);
+
+    if !sector_size_set {
+        while num_sectors > GEMDOS_MAX_SECTORS {
+            num_sectors >>= 1;
+            sector_size <<= 1;
+        }
+    }
+
+    let (mut clusters, mut fat_length);
+    loop {
+        let root_dir_sectors = cdiv(root_entries as u64 * 32, sector_size as u64) as u32;
+        let fatdata = num_sectors
+            .wrapping_sub(root_dir_sectors)
+            .wrapping_sub(reserved_sectors);
+        let ss = sector_size as i64;
+        let estimate = (2 * (fatdata as i64 * ss - 2 * nr_fats * size_fat / 8))
+            / (2 * (cluster_size as i64 * ss + nr_fats * size_fat / 8));
+        clusters = estimate as u32;
+        fat_length = cdiv(
+            (clusters.wrapping_add(2) as u64 * size_fat as u64) / 8,
+            sector_size as u64,
+        ) as u32;
+        // Recompute, as the PC search does: the rounding left room the first
+        // estimate had already spent.
+        clusters = fatdata.wrapping_sub((num_fats as u32).wrapping_mul(fat_length)) / cluster_size;
+        let maxclust = (fat_length as u64 * sector_size as u64 * 8 / size_fat as u64) as u32;
+        // The top sixteen values are special (FAT32: the four high bits are
+        // reserved); the first two entries are reserved.
+        let limit = if fat_type == FatType::Fat32 {
+            FatType::Fat32.max_clusters()
+        } else {
+            (1u32 << size_fat) - 0x10
+        };
+        if maxclust <= limit && clusters <= maxclust.wrapping_sub(2) {
+            break;
+        }
+        if sector_size_set {
+            return Err(Error::invalid(
+                "With this sector size, the maximum number of FAT entries would be exceeded.",
+            ));
+        }
+        num_sectors >>= 1;
+        sector_size <<= 1;
+        if sector_size > GEMDOS_MAX_SECTOR_SIZE {
+            return Err(Error::invalid(
+                "Would need a sector size > 16k, which GEMDOS can't work with",
+            ));
+        }
+    }
+
+    // Also reached when the first halving loop alone overshot.
+    if sector_size > GEMDOS_MAX_SECTOR_SIZE {
+        return Err(Error::invalid(
+            "Would need a sector size > 16k, which GEMDOS can't work with",
+        ));
+    }
+    if num_sectors >= GEMDOS_MAX_SECTORS {
+        return Err(Error::invalid("GEMDOS can't handle more than 65531 sectors"));
+    }
+    if clusters == 0 {
+        return Err(Error::NoGeometry {
+            fat_type: fat_type.name(),
+            sectors: num_sectors as u64,
+            detail: "Attempting to create a too small or a too large filesystem".into(),
+        });
+    }
+    Ok(AtariGeometry {
+        fat_type,
+        sector_size,
+        num_sectors,
+        cluster_size,
+        cluster_count: clusters,
+        fat_length,
+    })
 }
 
 /// The three candidate geometries one pass of the search produces.
@@ -712,6 +894,52 @@ mod tests {
         let g = Geometry::compute(1024 * MIB, 4096, &Params::new()).unwrap();
         assert_eq!(g.sector_size, 4096);
         assert_eq!(g.total_sectors, (1024 * MIB / 4096) as u32);
+    }
+
+    // -A (#11): GEMDOS's width rule, two-sector clusters, logical sectors
+    // doubled to stay at or under 65531, no alignment.
+    #[test]
+    fn the_atari_variant_grows_sectors_not_clusters() {
+        let g = geom(1440 * 1024, &Params::new().atari());
+        assert_eq!(g.variant, Variant::Atari);
+        assert_eq!((g.fat_type, g.sector_size, g.sectors_per_cluster), (FatType::Fat12, 512, 2));
+        assert_eq!((g.total_sectors, g.media, g.root_entries), (2880, 0xf0, 224));
+
+        let g = geom(64 * MIB, &Params::new().atari());
+        assert_eq!((g.fat_type, g.sector_size, g.sectors_per_cluster), (FatType::Fat16, 2048, 2));
+        assert_eq!(g.total_sectors, 32768);
+        assert!(!g.aligned);
+        assert_eq!(g.reserved_sectors, 1);
+        // No FAT16 minimum on Atari: 4 MiB is FAT16 with under 4085 clusters.
+        let g = geom(4 * MIB, &Params::new().atari());
+        assert_eq!(g.fat_type, FatType::Fat16);
+        assert!(g.cluster_count < 4085, "{}", g.cluster_count);
+
+        // A FAT12 FAT too big for its entries: 8 MiB doubles twice.
+        let g = geom(8 * MIB, &Params::new().atari().fat_type(FatType::Fat12));
+        assert_eq!((g.sector_size, g.total_sectors, g.cluster_count), (2048, 4096, 2041));
+        assert_eq!(g.fat_length, 2);
+
+        // FAT32 from 512 MiB, at GEMDOS's 16 KiB ceiling; 1 GiB is past it.
+        let g = geom(512 * MIB, &Params::new().atari());
+        assert_eq!((g.fat_type, g.sector_size, g.total_sectors), (FatType::Fat32, 16384, 32767));
+        assert_eq!((g.cluster_count, g.fat_length), (16363, 4));
+        let err = Geometry::compute(1024 * MIB, 512, &Params::new().atari()).unwrap_err();
+        assert!(err.to_string().contains("16k"), "{err}");
+    }
+
+    #[test]
+    fn an_atari_sector_size_that_was_given_is_kept_or_refused() {
+        let g = geom(32 * MIB, &Params::new().atari().sector_size(2048));
+        assert_eq!((g.sector_size, g.total_sectors), (2048, 16384));
+        // 64 MiB of 512-byte sectors is 131072, past what GEMDOS counts.
+        let err = Geometry::compute(64 * MIB, 512, &Params::new().atari().sector_size(512)).unwrap_err();
+        assert!(err.to_string().contains("65531"), "{err}");
+        // The 16-bit hidden field.
+        let err = Geometry::compute(16 * MIB, 512, &Params::new().atari().hidden_sectors(0x10000))
+            .unwrap_err();
+        assert!(err.to_string().contains("16bit"), "{err}");
+        assert!(Geometry::compute(16 * MIB, 512, &Params::new().atari().hidden_sectors(0xffff)).is_ok());
     }
 
     #[test]

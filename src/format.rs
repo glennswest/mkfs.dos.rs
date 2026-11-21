@@ -15,7 +15,7 @@ use crate::bytes::cdiv;
 use crate::device::BlockDevice;
 use crate::error::Result;
 use crate::layout::Geometry;
-use crate::params::{FatType, Params, NO_NAME};
+use crate::params::{FatType, Params, Variant, NO_NAME};
 use crate::structs::boot::{
     self, BootSector, BOOTCODE_FAT32_SIZE, BOOTCODE_OFFSET, BOOTCODE_OFFSET_FAT32, BOOTCODE_SIZE,
     BOOT_JUMP, DUMMY_BOOT_CODE, EXT_BOOT_SIGN,
@@ -97,7 +97,10 @@ pub async fn format_with<D: BlockDevice>(
     params: &Params,
 ) -> Result<Report> {
     let label = params.resolved_label()?;
-    let volume_id = params.resolved_volume_id();
+    let atari = geometry.variant == Variant::Atari;
+    // The Atari boot sector has room for 24 bits of serial number.
+    let full_id = params.resolved_volume_id();
+    let volume_id = if atari { full_id & 0x00ff_ffff } else { full_id };
     let bs = build_boot_sector(geometry, params, label, volume_id)?;
     let ss = geometry.sector_size as u64;
 
@@ -108,7 +111,8 @@ pub async fn format_with<D: BlockDevice>(
     // fails is no signature, as it is there.
     let mbr = if params.mbr {
         let disk_signature = if params.invariant {
-            volume_id
+            // The whole 32-bit serial, Atari or not: `disk_sig = volume_id`.
+            full_id
         } else {
             let mut old = vec![0u8; geometry.sector_size.max(512) as usize];
             let existing = match device.read_at(0, &mut old).await {
@@ -137,6 +141,11 @@ pub async fn format_with<D: BlockDevice>(
 
     let mut sector = vec![0u8; geometry.sector_size as usize];
     bs.encode(&mut sector);
+    if atari {
+        // No `0xAA55`: `mkfs.fat` sets `boot_sign` only for the PC variant.
+        sector[510] = 0;
+        sector[511] = 0;
+    }
     // The table goes into sector 0 itself, so the FAT32 backup boot sector,
     // written from this same buffer, carries it too — as it does from
     // `mkfs.fat`, which copies the whole `bs`.
@@ -246,6 +255,9 @@ pub(crate) fn build_boot_sector(
     volume_id: u32,
 ) -> Result<BootSector> {
     let fat32 = geometry.fat_type == FatType::Fat32;
+    if geometry.variant == Variant::Atari {
+        return Ok(atari_boot_sector(geometry, volume_id));
+    }
 
     let mut oem_name = *b"mkfs.fat";
     if let Some(name) = &params.oem_name {
@@ -313,6 +325,57 @@ pub(crate) fn build_boot_sector(
     })
 }
 
+/// The Atari boot sector, as dosfstools 4.2 `setup_tables()` leaves `bs` when
+/// `atari_format` is set.
+///
+/// Offset 0 is `60 1c`, the 68000's `bra.s` over the BPB, then `m`; the OEM
+/// name is `kdosf` and its last three bytes are the 24-bit serial number, low
+/// byte first. The BPB is the PC's, with `hidden` a 16-bit field on FAT12/16
+/// (the range is checked by [`Geometry::compute`]; a value that fits leaves
+/// bytes 30–31 zero either way). Of the extended boot record only the drive
+/// number is written: no `0x29`, no serial, no label (the label lives in the
+/// root directory alone), no `fs_type`, no boot code — and the caller leaves
+/// out the `0xAA55`.
+fn atari_boot_sector(geometry: &Geometry, volume_id: u32) -> BootSector {
+    let fat32 = geometry.fat_type == FatType::Fat32;
+    let mut oem_name = *b"kdosf\0\0\0";
+    oem_name[5..8].copy_from_slice(&volume_id.to_le_bytes()[..3]);
+    let (total_16, total_32) = if geometry.total_sectors >= 65536 {
+        (0, geometry.total_sectors)
+    } else {
+        (geometry.total_sectors as u16, 0)
+    };
+    BootSector {
+        jump: [0x60, 0x1c, b'm'],
+        oem_name,
+        bytes_per_sector: geometry.sector_size as u16,
+        sectors_per_cluster: geometry.sectors_per_cluster,
+        reserved_sectors: geometry.reserved_sectors as u16,
+        num_fats: geometry.num_fats,
+        root_entries: geometry.root_entries as u16,
+        total_sectors_16: total_16,
+        media: geometry.media,
+        fat_length_16: if fat32 { 0 } else { geometry.fat_length as u16 },
+        sectors_per_track: geometry.sectors_per_track,
+        heads: geometry.heads,
+        hidden_sectors: geometry.hidden_sectors,
+        total_sectors_32: total_32,
+        fat_length_32: if fat32 { geometry.fat_length } else { 0 },
+        flags: 0,
+        version: [0, 0],
+        root_cluster: geometry.root_cluster,
+        info_sector: geometry.info_sector,
+        backup_boot: geometry.backup_boot,
+        drive_number: geometry.drive_number,
+        boot_flags: 0,
+        ext_boot_sign: 0,
+        volume_id: 0,
+        volume_label: [0; 11],
+        fs_type: [0; 8],
+        boot_code: Vec::new(),
+    }
+}
+
 /// The leading sectors of a fresh FAT: the reserved entries, and the root
 /// directory's chain on FAT32.
 ///
@@ -331,7 +394,13 @@ fn first_fat_content(geometry: &Geometry) -> Vec<u8> {
     crate::fat::set_entry(&mut buf, geometry.fat_type, 0, 0x0fff_ff00 | geometry.media as u32);
     crate::fat::set_entry(&mut buf, geometry.fat_type, 1, 0xffff_ffff);
     if geometry.fat_type == FatType::Fat32 {
-        crate::fat::set_entry(&mut buf, geometry.fat_type, 2, geometry.fat_type.eof_marker());
+        // `FAT_EOF` is `0x0fffffff` on the Atari variant, `0x0ffffff8` on the PC.
+        let eof = if geometry.variant == Variant::Atari {
+            geometry.fat_type.end_of_chain()
+        } else {
+            geometry.fat_type.eof_marker()
+        };
+        crate::fat::set_entry(&mut buf, geometry.fat_type, 2, eof);
     }
     buf
 }
@@ -512,6 +581,43 @@ mod tests {
         assert_eq!(&dev.to_vec()[440..444], &sig.to_le_bytes());
         let pinned = format(&dev, &Params::new().mbr().invariant()).await.unwrap();
         assert_eq!(pinned.disk_signature, Some(crate::params::INVARIANT_VOLUME_ID));
+    }
+
+    // -A (#11): the GEMDOS boot sector. 68000 branch and `m`, `kdosf` and
+    // the low 24 bits of the serial, the drive number and nothing else of
+    // the extended boot record, no boot code, no 0xAA55; the label is in the
+    // root directory only.
+    #[tokio::test]
+    async fn the_atari_boot_sector_is_gemdos_shaped() {
+        let (dev, report) = make(16 * MIB, &Params::new().invariant().atari().label("GEM")).await;
+        let image = dev.to_vec();
+        assert_eq!(&image[0..3], &[0x60, 0x1c, b'm']);
+        assert_eq!(&image[3..11], b"kdosf\xcd\xab\x34");
+        assert_eq!(report.volume_id, 0x34abcd);
+        assert_eq!(crate::bytes::get_u16(&image, 11), 512);
+        assert_eq!(image[13], 2);
+        assert_eq!(crate::bytes::get_u16(&image, 19), 32768);
+        assert_eq!(image[36], 0x80, "drive number");
+        assert!(image[37..512].iter().all(|&b| b == 0), "no EBR, boot code or signature");
+
+        let root = report.geometry.root_dir_start_sector() as usize * 512;
+        let entry = DirEntry::decode(&image[root..]);
+        assert!(entry.is_volume_label());
+        assert_eq!(entry.short_name(), "GEM");
+    }
+
+    // On FAT32 the Atari root chain ends 0x0fffffff, not 0x0ffffff8.
+    #[tokio::test]
+    async fn an_atari_fat32_root_ends_with_all_ones() {
+        let (dev, report) = make(512 * MIB, &Params::new().invariant().atari()).await;
+        let g = &report.geometry;
+        assert_eq!((g.fat_type, g.sector_size), (FatType::Fat32, 16384));
+        let image = dev.to_vec();
+        let fat = &image[g.fat_start_sector() as usize * 16384..];
+        assert_eq!(crate::fat::get_entry(fat, FatType::Fat32, 2), 0x0fff_ffff);
+        assert_eq!(&image[510..512], &[0, 0]);
+        let backup = g.backup_boot as usize * 16384;
+        assert_eq!(&image[..512], &image[backup..backup + 512]);
     }
 
     // A -m message that runs past offset 439 is cut there.

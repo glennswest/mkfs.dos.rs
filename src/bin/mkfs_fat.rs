@@ -5,12 +5,12 @@
 
 use std::io::Read;
 
-use clap::Parser;
+use clap::{ArgMatches, CommandFactory, FromArgMatches, Parser};
 
 use mkfs_dos::device::{BlockDevice, FileDevice};
 use mkfs_dos::format::format_with;
 use mkfs_dos::layout::Geometry;
-use mkfs_dos::params::{FatType, Params};
+use mkfs_dos::params::{FatType, Params, Variant, OLDGEMDOS_MAX_SECTORS};
 use mkfs_dos::BootMessage;
 
 #[derive(Parser, Debug)]
@@ -106,6 +106,22 @@ struct Args {
     )]
     mbr: Option<String>,
 
+    /// Toggle the Atari variant of the filesystem: GEMDOS's boot sector and
+    /// geometry. Each `-A` flips it, as in `mkfs.fat`.
+    #[arg(short = 'A', action = clap::ArgAction::Count)]
+    atari: u8,
+
+    /// The variant of filesystem: `standard` or `atari`. With `-A` the last
+    /// one on the command line wins, as in `mkfs.fat`.
+    #[arg(long, value_name = "TYPE")]
+    variant: Option<String>,
+
+    /// Format a whole disk even though it has partitions on it, or a device
+    /// that other devices are mapped onto. Without it, `mkfs.fat`'s safety
+    /// check refuses.
+    #[arg(short = 'I')]
+    ignore_safety_checks: bool,
+
     /// Use constant values wherever a timestamp or serial number would go, so
     /// two runs over the same geometry produce identical images.
     #[arg(long)]
@@ -149,6 +165,106 @@ fn parse_mbr(arg: Option<&str>) -> anyhow::Result<Option<bool>> {
     }
 }
 
+/// The variant `-A` and `--variant` leave, read in command-line order:
+/// `mkfs.fat`'s getopt loop flips `atari_format` at each `-A` and sets it at
+/// each `--variant`, so whichever comes last decides.
+fn resolve_variant(matches: &ArgMatches) -> anyhow::Result<Variant> {
+    let mut events: Vec<(usize, Option<Variant>)> = Vec::new();
+    if let Some(idx) = matches.indices_of("atari") {
+        events.extend(idx.map(|i| (i, None)));
+    }
+    if let (Some(idx), Some(vals)) = (
+        matches.indices_of("variant"),
+        matches.get_many::<String>("variant"),
+    ) {
+        for (i, v) in idx.zip(vals) {
+            let v = v.parse::<Variant>().map_err(|e| anyhow::anyhow!(e))?;
+            events.push((i, Some(v)));
+        }
+    }
+    events.sort_by_key(|&(i, _)| i);
+    let mut variant = Variant::Standard;
+    for (_, e) in events {
+        variant = match e {
+            Some(v) => v,
+            None if variant == Variant::Atari => Variant::Standard,
+            None => Variant::Atari,
+        };
+    }
+    Ok(variant)
+}
+
+/// The sysfs directory of a block device, `/sys/dev/block/MAJOR:MINOR`, or
+/// `None` for anything that is not a block device (an image file).
+fn block_sysfs_dir(path: &str) -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::{FileTypeExt, MetadataExt};
+        let meta = std::fs::metadata(path).ok()?;
+        if !meta.file_type().is_block_device() {
+            return None;
+        }
+        // glibc's major()/minor().
+        let rdev = meta.rdev();
+        let major = ((rdev >> 8) & 0xfff) | ((rdev >> 32) & 0xffff_f000);
+        let minor = (rdev & 0xff) | ((rdev >> 12) & 0xffff_ff00);
+        let sys = std::path::PathBuf::from(format!("/sys/dev/block/{major}:{minor}"));
+        sys.is_dir().then_some(sys)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+/// `has_children` from dosfstools 4.2 `get_block_linux_info()`: `Some(true)`
+/// when a subdirectory of the device's sysfs directory is a partition
+/// (a regular `partition` file) that does not start at sector 0 — one that
+/// does is the whole device again — or when `holders` lists a device mapped
+/// onto this one; `None` when the directory could not be read, which, as
+/// there, does not stop the format.
+fn has_children(sys: &std::path::Path) -> Option<bool> {
+    let dir = std::fs::read_dir(sys).ok()?;
+    let mut unknown = false;
+    for entry in dir {
+        let Ok(entry) = entry else {
+            unknown = true;
+            continue;
+        };
+        // DT_DIR (or DT_UNKNOWN); the `device` and `subsystem` symlinks are
+        // not followed, as readdir's d_type does not follow them.
+        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(true) {
+            continue;
+        }
+        match std::fs::metadata(entry.path().join("partition")) {
+            Ok(m) if m.is_file() => {
+                let start = std::fs::read_to_string(entry.path().join("start"))
+                    .ok()
+                    .and_then(|s| s.trim().parse::<i64>().ok())
+                    .unwrap_or(-1);
+                if start != 0 {
+                    return Some(true);
+                }
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => unknown = true,
+        }
+    }
+    let held = std::fs::read_dir(sys.join("holders"))
+        .map(|mut d| d.next().is_some())
+        .unwrap_or(false);
+    if held {
+        return Some(true);
+    }
+    if unknown {
+        None
+    } else {
+        Some(false)
+    }
+}
+
 /// `--mbr=auto`: dosfstools 4.2 writes the table when `get_device_info()`
 /// says `TYPE_FIXED` and partition 0 — a block device that is a whole disk
 /// (no `partition` in sysfs), not a loop device, not a device-mapper or other
@@ -156,37 +272,20 @@ fn parse_mbr(arg: Option<&str>) -> anyhow::Result<Option<bool>> {
 /// An image file, a partition, and anything off Linux, where it learns
 /// nothing from sysfs, get none.
 fn auto_mbr(path: &str) -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        use std::os::unix::fs::{FileTypeExt, MetadataExt};
-        let Ok(meta) = std::fs::metadata(path) else {
-            return false;
-        };
-        if !meta.file_type().is_block_device() {
-            return false;
-        }
-        // glibc's major()/minor().
-        let rdev = meta.rdev();
-        let major = ((rdev >> 8) & 0xfff) | ((rdev >> 32) & 0xffff_f000);
-        let minor = (rdev & 0xff) | ((rdev >> 12) & 0xffff_ff00);
-        let sys = std::path::PathBuf::from(format!("/sys/dev/block/{major}:{minor}"));
-        if !sys.is_dir() || sys.join("partition").exists() || sys.join("loop").exists() {
-            return false;
-        }
-        let stacked = std::fs::read_dir(sys.join("slaves"))
-            .map(|mut d| d.next().is_some())
-            .unwrap_or(false);
-        let removable = std::fs::read_to_string(sys.join("removable"))
-            .ok()
-            .and_then(|s| s.trim().parse::<i32>().ok())
-            .unwrap_or(0);
-        !stacked && removable == 0
+    let Some(sys) = block_sysfs_dir(path) else {
+        return false;
+    };
+    if sys.join("partition").exists() || sys.join("loop").exists() {
+        return false;
     }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = path;
-        false
-    }
+    let stacked = std::fs::read_dir(sys.join("slaves"))
+        .map(|mut d| d.next().is_some())
+        .unwrap_or(false);
+    let removable = std::fs::read_to_string(sys.join("removable"))
+        .ok()
+        .and_then(|s| s.trim().parse::<i32>().ok())
+        .unwrap_or(0);
+    !stacked && removable == 0
 }
 
 /// The size to format: `blocks` 1024-byte blocks, or the whole device. A
@@ -208,7 +307,8 @@ fn format_size(blocks: Option<u64>, device: &str, device_size: u64) -> anyhow::R
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
+    let matches = Args::command().get_matches();
+    let args = Args::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
 
     let mut params = Params::new();
     if let Some(t) = &args.fat_type {
@@ -224,6 +324,7 @@ async fn main() -> anyhow::Result<()> {
     params.backup_boot = args.backup_boot;
     params.align = !args.no_align;
     params.invariant = args.invariant;
+    params.variant = resolve_variant(&matches)?;
     if args.fixed {
         params.disk_type = mkfs_dos::params::DiskType::Fixed;
     }
@@ -268,6 +369,23 @@ async fn main() -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("cannot open {}: {e}", args.device))?;
 
+    let sysfs = block_sysfs_dir(&args.device);
+    // `mkfs.fat` refuses a whole disk with partitions on it, or a device
+    // something is mapped onto, unless `-I`.
+    if !args.ignore_safety_checks {
+        if sysfs.as_deref().and_then(has_children) == Some(true) {
+            anyhow::bail!(
+                "Partitions or virtual mappings on device '{}', not making filesystem (use -I to override)",
+                args.device
+            );
+        }
+    }
+    // A block device's sector size counts as given (`sector_size_set`), so
+    // the Atari variant refuses rather than enlarging its logical sectors.
+    if sysfs.is_some() && params.sector_size.is_none() {
+        params.sector_size = Some(device.logical_sector_size());
+    }
+
     // A block count names a filesystem of that size inside the device, which is
     // how `mkfs.fat` takes it — 1024-byte blocks, whatever the sector size.
     let size = format_size(args.blocks, &args.device, device.size())?;
@@ -281,17 +399,26 @@ async fn main() -> anyhow::Result<()> {
             eprintln!("Warning: message too long; truncated");
         }
     }
-    // mkfs.fat formats sectors up to 32768 bytes and says so above 4096.
-    if geometry.sector_size > 4096 {
+    // mkfs.fat formats sectors up to 32768 bytes and says so above 4096 —
+    // of the size asked for (or the device's), before the Atari search grows
+    // its logical sectors, which it does without a warning.
+    let asked = params
+        .sector_size
+        .unwrap_or(device.logical_sector_size())
+        .max(device.logical_sector_size());
+    if asked > 4096 {
         eprintln!(
-            "Warning: sector size {} > 4096 is non-standard, filesystem may not be usable",
-            geometry.sector_size
+            "Warning: sector size {asked} > 4096 is non-standard, filesystem may not be usable"
         );
     }
     if let Some(message) = &message {
         if geometry.fat_type == FatType::Fat32 && !message.fits_fat32() {
             eprintln!("Warning: message too long; truncated");
         }
+    }
+
+    if geometry.variant == Variant::Atari && geometry.total_sectors >= OLDGEMDOS_MAX_SECTORS {
+        println!("Warning: More than 32765 sector need TOS 1.04 or higher.");
     }
 
     if args.dry_run {
@@ -339,6 +466,9 @@ fn print_geometry(g: &Geometry) {
     println!("Media descriptor:     {:#04x}", g.media);
     println!("Geometry:             {} heads, {} sectors per track", g.heads, g.sectors_per_track);
     println!("Aligned:              {}", if g.aligned { "yes" } else { "no" });
+    if g.variant == Variant::Atari {
+        println!("Variant:              Atari");
+    }
 }
 
 #[cfg(test)]
@@ -375,6 +505,60 @@ mod tests {
         assert_eq!(off.mbr.as_deref(), Some("n"));
         let none = Args::try_parse_from(["mkfs.fat", "img"]).unwrap();
         assert_eq!(none.mbr, None);
+    }
+
+    // -A toggles, --variant sets, and the last one on the line wins (#11).
+    #[test]
+    fn the_variant_follows_command_line_order() {
+        let v = |argv: &[&str]| {
+            let mut full = vec!["mkfs.fat"];
+            full.extend_from_slice(argv);
+            full.push("img");
+            let m = Args::command().try_get_matches_from(full).unwrap();
+            resolve_variant(&m)
+        };
+        assert_eq!(v(&[]).unwrap(), Variant::Standard);
+        assert_eq!(v(&["-A"]).unwrap(), Variant::Atari);
+        assert_eq!(v(&["-A", "-A"]).unwrap(), Variant::Standard);
+        assert_eq!(v(&["-A", "-A", "-A"]).unwrap(), Variant::Atari);
+        assert_eq!(v(&["--variant", "atari"]).unwrap(), Variant::Atari);
+        assert_eq!(v(&["--variant=ATARI", "-A"]).unwrap(), Variant::Standard);
+        assert_eq!(v(&["-A", "--variant", "standard"]).unwrap(), Variant::Standard);
+        assert_eq!(v(&["-A", "--variant", "atari"]).unwrap(), Variant::Atari);
+        assert_eq!(v(&["--variant", "standard", "-A"]).unwrap(), Variant::Atari);
+        assert!(v(&["--variant", "amiga"]).is_err());
+        let a = Args::try_parse_from(["mkfs.fat", "-I", "img"]).unwrap();
+        assert!(a.ignore_safety_checks);
+        assert!(!Args::try_parse_from(["mkfs.fat", "img"]).unwrap().ignore_safety_checks);
+    }
+
+    // -I (#11): has_children as dosfstools reads sysfs, over a fake tree.
+    #[test]
+    fn a_disk_with_partitions_or_holders_has_children() {
+        let root = std::env::temp_dir().join(format!("mkfs-fat-sysfs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let disk = root.join("8:0");
+        std::fs::create_dir_all(disk.join("holders")).unwrap();
+        std::fs::create_dir_all(disk.join("queue")).unwrap();
+        std::fs::write(disk.join("size"), "131072\n").unwrap();
+        assert_eq!(has_children(&disk), Some(false));
+
+        // A partition that starts at 0 is the whole disk again, not a child.
+        std::fs::create_dir_all(disk.join("sda1")).unwrap();
+        std::fs::write(disk.join("sda1/partition"), "1\n").unwrap();
+        std::fs::write(disk.join("sda1/start"), "0\n").unwrap();
+        assert_eq!(has_children(&disk), Some(false));
+        std::fs::write(disk.join("sda1/start"), "2048\n").unwrap();
+        assert_eq!(has_children(&disk), Some(true));
+        std::fs::remove_dir_all(disk.join("sda1")).unwrap();
+
+        // A holder (device-mapper, md) is a child too.
+        std::fs::write(disk.join("holders/dm-0"), "").unwrap();
+        assert_eq!(has_children(&disk), Some(true));
+
+        assert_eq!(has_children(&root.join("missing")), None);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(block_sysfs_dir("/nonexistent/device").is_none());
     }
 
     // Auto never writes a table on an image file or a non-block device.

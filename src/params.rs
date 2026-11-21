@@ -165,6 +165,49 @@ pub enum DiskType {
     Fixed,
 }
 
+/// Which flavour of FAT boot sector to write — `mkfs.fat --variant`, `-A`.
+///
+/// The Atari ST's GEMDOS reads FAT, but not the PC's boot sector: it wants a
+/// 68000 branch where the x86 jump is, a 24-bit serial number inside the OEM
+/// name, no extended boot record and no `0xAA55`; and it can only count to
+/// 65531 logical sectors, so a large volume gets larger *logical* sectors
+/// rather than larger clusters. dosfstools 4.2 `setup_tables()` writes it when
+/// `atari_format` is set, and so does this crate for [`Variant::Atari`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Variant {
+    /// The PC boot sector — what everything but an Atari reads.
+    #[default]
+    Standard,
+    /// The Atari ST / GEMDOS boot sector and geometry.
+    Atari,
+}
+
+impl std::str::FromStr for Variant {
+    type Err = String;
+
+    /// The spellings `--variant` takes, case-insensitively.
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        if s.eq_ignore_ascii_case("standard") {
+            Ok(Variant::Standard)
+        } else if s.eq_ignore_ascii_case("atari") {
+            Ok(Variant::Atari)
+        } else {
+            Err(format!("Unknown variant: {s}"))
+        }
+    }
+}
+
+/// GEMDOS's limit on logical sectors — `GEMDOS_MAX_SECTORS`. An Atari volume
+/// doubles its logical sector size until its sector count is at most this.
+pub const GEMDOS_MAX_SECTORS: u32 = 65531;
+
+/// Above this many sectors an Atari volume needs TOS 1.04 —
+/// `OLDGEMDOS_MAX_SECTORS`.
+pub const OLDGEMDOS_MAX_SECTORS: u32 = 32765;
+
+/// The largest logical sector GEMDOS works with — `GEMDOS_MAX_SECTOR_SIZE`.
+pub const GEMDOS_MAX_SECTOR_SIZE: u32 = 16 * 1024;
+
 /// The 32-bit serial number `mkfs.fat --invariant` writes, so that two runs
 /// produce the same image.
 pub const INVARIANT_VOLUME_ID: u32 = 0x1234_abcd;
@@ -247,6 +290,9 @@ pub struct Params {
     /// when told to, and the `mkfs-fat` CLI resolves `auto` as `mkfs.fat`
     /// does. See [`crate::structs::FakeMbr`].
     pub mbr: bool,
+    /// `-A`, `--variant`: the PC boot sector, or the Atari one. See
+    /// [`Variant`].
+    pub variant: Variant,
 }
 
 impl Params {
@@ -359,6 +405,12 @@ impl Params {
     /// Write a (fake) MBR partition table into the boot sector — `--mbr=y`.
     pub fn mbr(mut self) -> Self {
         self.mbr = true;
+        self
+    }
+
+    /// Write the Atari variant — `mkfs.fat -A`, `--variant atari`.
+    pub fn atari(mut self) -> Self {
+        self.variant = Variant::Atari;
         self
     }
 
@@ -498,6 +550,16 @@ mod tests {
             assert!(t.is_bad(t.bad_marker()));
             assert!(!t.is_end_of_chain(t.bad_marker()));
         }
+    }
+
+    #[test]
+    fn variants_parse_as_mkfs_fat_spells_them() {
+        assert_eq!("standard".parse::<Variant>().unwrap(), Variant::Standard);
+        assert_eq!("Atari".parse::<Variant>().unwrap(), Variant::Atari);
+        assert_eq!("ATARI".parse::<Variant>().unwrap(), Variant::Atari);
+        assert!("amiga".parse::<Variant>().is_err());
+        assert_eq!(Params::new().variant, Variant::Standard);
+        assert_eq!(Params::new().atari().variant, Variant::Atari);
     }
 
     #[test]

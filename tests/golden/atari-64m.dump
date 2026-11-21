@@ -1,0 +1,12 @@
+mkfs.fat 4.2 (2021-01-31)
+Warning: More than 32765 sector need TOS 1.04 or higher.
+atari-64m.img has 8 heads and 32 sectors per track,
+hidden sectors 0x0000;
+logical sector size is 2048,
+using 0xf8 media descriptor, with 32768 sectors;
+drive number 0x80;
+filesystem has 2 16-bit FATs and 2 sectors per cluster.
+FAT size is 16 sectors, and provides 16363 clusters.
+There is 1 reserved sector.
+Root directory contains 512 slots and uses 8 sectors.
+Volume ID is 0034abcd, no volume label.

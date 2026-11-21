@@ -77,5 +77,5 @@ pub use format::{format, Report};
 pub use fs::Filesystem;
 pub use fsck::{check, FsckOptions, FsckReport};
 pub use layout::Geometry;
-pub use params::{DiskType, FatType, Params};
+pub use params::{DiskType, FatType, Params, Variant};
 pub use structs::{BootMessage, BootSector, DirEntry, FsInfo};
