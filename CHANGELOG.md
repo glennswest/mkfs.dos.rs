@@ -3,6 +3,17 @@
 ## [Unreleased]
 
 ### 2026-11-21
+- **fix:** `Filesystem::set_fat_entry` holds a per-handle async lock across
+  its whole read-modify-write, over every FAT copy. Two tasks updating
+  neighbouring FAT12 entries, which share a byte, no longer lose one link or
+  leave the copies disagreeing. FAT writes to one device must go through one
+  handle (#13, finding 74ddc2dd4ffe).
+- **fix:** `Filesystem::open`, and so fsck, refuses as `Error::Corrupt` a FAT
+  of zero sectors, a FAT too short for entries 0 through `cluster_count + 1`,
+  and a cluster count reaching the bad-cluster marker. A 64 MiB FAT16 with
+  `BPB_FATSz16` 1 used to open with 32758 clusters behind a 512-byte FAT and
+  panic fsck. `BootSector::first_data_sector` sums in 64 bits and saturates,
+  so a huge `fat_length_32` no longer overflows (#13, finding fd9c0c4ab7a4).
 - **feat:** `mkfs-fat --mbr[=y|n|a]` and `Params::mbr` write a (fake) MBR
   partition table into the boot sector, as `mkfs.fat 4.2` does: disk
   signature at 440 (kept from the device, the serial under `--invariant`),

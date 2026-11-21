@@ -9,6 +9,14 @@
 //! Reads and writes take `&self`, like the device beneath them. A checker that
 //! reads the whole FAT and a writer that updates one entry can therefore run
 //! against the same volume without either of them owning it.
+//!
+//! FAT entry updates are the one place that needs more than the device's
+//! per-call atomicity: a FAT12 entry shares a byte with its neighbour, so an
+//! update is a read-modify-write across awaited calls, over every FAT copy.
+//! [`Filesystem::set_fat_entry`] holds the handle's FAT lock for the whole of
+//! it. The lock belongs to the handle, so FAT writes to one device go through
+//! one `Filesystem` — share it (`Arc`) rather than opening a second handle on
+//! the same device, whose writes the lock cannot see.
 
 use crate::device::BlockDevice;
 use crate::error::{Error, Result};
@@ -24,6 +32,10 @@ pub struct Filesystem<D: BlockDevice> {
     device: D,
     boot: BootSector,
     fat_type: FatType,
+    /// Held across a whole FAT entry update, every copy (finding
+    /// 74ddc2dd4ffe): two FAT12 entries share a byte, and two tasks updating
+    /// them unserialised each write back the other's stale nibble.
+    fat_lock: tokio::sync::Mutex<()>,
 }
 
 impl<D: BlockDevice> std::fmt::Debug for Filesystem<D> {
@@ -68,11 +80,13 @@ impl<D: BlockDevice> Filesystem<D> {
                 "the geometry leaves no room for a single cluster",
             ));
         }
+        check_fat_capacity(&boot, fat_type)?;
 
         Ok(Self {
             device,
             boot,
             fat_type,
+            fat_lock: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -163,7 +177,7 @@ impl<D: BlockDevice> Filesystem<D> {
         let span = fat::entry_span(self.fat_type);
         let off = self.fat_offset(0) + fat::entry_offset(self.fat_type, cluster);
         let mut buf = [0u8; 4];
-        let n = span.min(self.fat_bytes() - fat::entry_offset(self.fat_type, cluster)) as usize;
+        let n = span.min(self.fat_bytes().saturating_sub(fat::entry_offset(self.fat_type, cluster))) as usize;
         self.device.read_at(off, &mut buf[..n]).await?;
         Ok(match self.fat_type {
             FatType::Fat12 => fat::get_entry12_split(buf[0], buf[1], cluster),
@@ -178,10 +192,15 @@ impl<D: BlockDevice> Filesystem<D> {
     /// to — it is a copy every driver assumes is current, and a volume whose
     /// FATs disagree is one `fsck.fat` will report and some drivers will
     /// silently pick the wrong half of.
+    ///
+    /// The update is serialised against every other `set_fat_entry` on this
+    /// handle, across all the copies, so concurrent updates to neighbouring
+    /// FAT12 entries neither lose a link nor leave the copies disagreeing.
     pub async fn set_fat_entry(&self, cluster: u32, value: u32) -> Result<()> {
         self.check_cluster(cluster)?;
         let entry_off = fat::entry_offset(self.fat_type, cluster);
-        let span = fat::entry_span(self.fat_type).min(self.fat_bytes() - entry_off) as usize;
+        let span = fat::entry_span(self.fat_type).min(self.fat_bytes().saturating_sub(entry_off)) as usize;
+        let _fat = self.fat_lock.lock().await;
 
         for index in 0..self.boot.num_fats {
             let off = self.fat_offset(index) + entry_off;
@@ -390,6 +409,48 @@ impl<D: BlockDevice> Filesystem<D> {
     }
 }
 
+/// Refuse a boot sector whose FAT cannot hold its clusters (finding
+/// fd9c0c4ab7a4).
+///
+/// Entries 0 through `cluster_count + 1` must all lie inside one FAT, or every
+/// FAT access past its end reads a neighbouring structure or, on an in-memory
+/// FAT, indexes past the buffer — a damaged `BPB_FATSz16` of 1 on a 64 MiB
+/// FAT16 used to leave 32758 clusters behind a 512-byte FAT and panic fsck.
+/// The Linux driver refuses the same mount. Nor may a cluster's number reach
+/// the bad-cluster marker (`0x…ff7`): from there up the numbers are markers.
+fn check_fat_capacity(boot: &BootSector, fat_type: FatType) -> Result<()> {
+    let fat_sectors = boot.fat_length();
+    if fat_sectors == 0 {
+        return Err(Error::corrupt("boot sector", "the FAT is zero sectors long"));
+    }
+    let count = boot.cluster_count();
+    // The highest cluster, `count + 1`, must be a number below the
+    // bad-cluster marker, or its own number reads as a marker.
+    if count as u64 + 1 >= fat_type.bad_marker() as u64 {
+        return Err(Error::corrupt(
+            "boot sector",
+            format!(
+                "{count} clusters is more than {fat_type} can number (clusters end below {:#x})",
+                fat_type.bad_marker()
+            ),
+        ));
+    }
+    let fat_bytes = fat_sectors as u64 * boot.bytes_per_sector as u64;
+    // The last entry, `count + 1`, ends here; `count` is at most
+    // `u32::MAX - 1`, since at least one reserved sector precedes the data.
+    let needed = fat::entry_offset(fat_type, count + 1) + fat::entry_span(fat_type);
+    if needed > fat_bytes {
+        return Err(Error::corrupt(
+            "boot sector",
+            format!(
+                "a FAT of {fat_sectors} sectors ({fat_bytes} bytes) cannot hold the {} entries {count} clusters need ({needed} bytes)",
+                count as u64 + 2
+            ),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,5 +598,86 @@ mod tests {
 
         let err = Filesystem::open(dev).await.unwrap_err();
         assert!(matches!(err, Error::Corrupt { .. }), "{err}");
+    }
+
+    /// A device that yields to the scheduler around every read and write, so
+    /// concurrent tasks interleave between a read and the write that follows.
+    struct YieldingDevice(MemDevice);
+
+    #[async_trait::async_trait]
+    impl BlockDevice for YieldingDevice {
+        fn size(&self) -> u64 {
+            self.0.size()
+        }
+        async fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<()> {
+            self.0.read_at(offset, buf).await?;
+            tokio::task::yield_now().await;
+            Ok(())
+        }
+        async fn write_at(&self, offset: u64, buf: &[u8]) -> Result<()> {
+            tokio::task::yield_now().await;
+            self.0.write_at(offset, buf).await
+        }
+        async fn flush(&self) -> Result<()> {
+            self.0.flush().await
+        }
+    }
+
+    // Finding 74ddc2dd4ffe: FAT12 entries 2k and 2k+1 share byte 3k+1.
+    // Updated concurrently, each pair keeps both values in every FAT copy.
+    #[tokio::test]
+    async fn concurrent_fat12_updates_to_a_shared_byte_both_land() {
+        let dev = MemDevice::new(8 * MIB);
+        format(&dev, &Params::new()).await.unwrap();
+        let fs = Filesystem::open(YieldingDevice(dev)).await.unwrap();
+        assert_eq!(fs.fat_type(), FatType::Fat12);
+
+        let updates = (10u32..50).map(|c| fs.set_fat_entry(c, 0x100 + c));
+        futures::future::try_join_all(updates).await.unwrap();
+
+        let fat0 = fs.read_fat(0).await.unwrap();
+        assert_eq!(fat0, fs.read_fat(1).await.unwrap(), "the FAT copies disagree");
+        for c in 10u32..50 {
+            assert_eq!(fat::get_entry(&fat0, FatType::Fat12, c), 0x100 + c, "cluster {c}");
+        }
+    }
+
+    async fn formatted(size: u64) -> Vec<u8> {
+        let dev = MemDevice::new(size);
+        format(&dev, &Params::new().invariant()).await.unwrap();
+        dev.to_vec()
+    }
+
+    // Finding fd9c0c4ab7a4: BPB_FATSz16 1 in place of 128 on a 64 MiB FAT16
+    // leaves 32758 clusters behind a 512-byte FAT. Open refuses it as corrupt,
+    // and fsck returns that error rather than indexing past the FAT.
+    #[tokio::test]
+    async fn a_fat_too_short_for_its_clusters_is_refused() {
+        let mut image = formatted(64 * MIB).await;
+        assert_eq!(&image[22..24], &128u16.to_le_bytes());
+        image[22..24].copy_from_slice(&1u16.to_le_bytes());
+
+        let err = Filesystem::open(MemDevice::from_vec(image.clone())).await.unwrap_err();
+        assert!(matches!(err, Error::Corrupt { .. }), "{err}");
+        let err = crate::fsck::check(MemDevice::from_vec(image), &crate::fsck::FsckOptions::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Corrupt { .. }), "{err}");
+    }
+
+    // A FAT32 FAT length of zero, or one so large the data area's start
+    // overflows 32 bits, is refused without an arithmetic panic.
+    #[tokio::test]
+    async fn a_fat32_fat_length_of_zero_or_overflowing_is_refused() {
+        let image = formatted(1024 * MIB).await;
+        for bad in [0u32, u32::MAX, u32::MAX / 2 + 1] {
+            let mut image = image.clone();
+            image[36..40].copy_from_slice(&bad.to_le_bytes());
+            let err = Filesystem::open(MemDevice::from_vec(image)).await.unwrap_err();
+            assert!(matches!(err, Error::Corrupt { .. }), "{bad:#x}: {err}");
+        }
+        // Undamaged, the same image opens: the check is not too tight for
+        // what the formatter writes (the goldens hold it to mkfs.fat).
+        Filesystem::open(MemDevice::from_vec(image)).await.unwrap();
     }
 }

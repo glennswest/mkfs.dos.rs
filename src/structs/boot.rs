@@ -273,10 +273,16 @@ impl BootSector {
     }
 
     /// First sector of the data area — the sector cluster 2 begins at.
+    ///
+    /// Summed in 64 bits: a damaged `fat_length_32` times the FAT count
+    /// overflows 32. A sum past `u32::MAX` saturates there, which is past
+    /// every volume's last sector, so [`Self::cluster_count`] is zero and
+    /// [`crate::Filesystem::open`] refuses it (finding fd9c0c4ab7a4).
     pub fn first_data_sector(&self) -> u32 {
-        self.reserved_sectors as u32
-            + self.num_fats as u32 * self.fat_length()
-            + self.root_dir_sectors()
+        let first = self.reserved_sectors as u64
+            + self.num_fats as u64 * self.fat_length() as u64
+            + self.root_dir_sectors() as u64;
+        u32::try_from(first).unwrap_or(u32::MAX)
     }
 
     /// Number of data clusters, which is what actually decides the FAT width.

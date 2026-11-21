@@ -31,6 +31,14 @@ geometry before anything is written), `check` with `FsckOptions`, and
 device; `MemDevice` formats a buffer. Library consumers who do not want the CLI
 dependencies take it with `default-features = false`.
 
+`Filesystem::open` refuses, as `Error::Corrupt`, a boot sector whose FAT is
+zero sectors or too short for entries 0 through `cluster_count + 1`, or whose
+cluster count reaches the bad-cluster marker. `Filesystem::set_fat_entry`
+serialises its read-modify-write over every FAT copy, so concurrent tasks on
+one handle can update neighbouring FAT12 entries, which share a byte. The lock
+is the handle's: FAT writes to one device go through one `Filesystem`, shared
+(`Arc`) rather than opened twice.
+
 FAT writes the sector size into the boot sector, so it is not a hint.
 `FileDevice` asks the kernel for a block device's logical sector size
 (`BLKSSZGET`, Linux only) and reports 512 for a plain file; an image meant for a
