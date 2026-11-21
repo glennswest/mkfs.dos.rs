@@ -170,8 +170,11 @@ fn parse_mbr(arg: Option<&str>) -> anyhow::Result<Option<bool>> {
 /// each `--variant`, so whichever comes last decides.
 fn resolve_variant(matches: &ArgMatches) -> anyhow::Result<Variant> {
     let mut events: Vec<(usize, Option<Variant>)> = Vec::new();
-    if let Some(idx) = matches.indices_of("atari") {
-        events.extend(idx.map(|i| (i, None)));
+    // A count's default `0` has an index too; only occurrences count.
+    if matches.value_source("atari") == Some(clap::parser::ValueSource::CommandLine) {
+        if let Some(idx) = matches.indices_of("atari") {
+            events.extend(idx.map(|i| (i, None)));
+        }
     }
     if let (Some(idx), Some(vals)) = (
         matches.indices_of("variant"),
@@ -372,13 +375,11 @@ async fn main() -> anyhow::Result<()> {
     let sysfs = block_sysfs_dir(&args.device);
     // `mkfs.fat` refuses a whole disk with partitions on it, or a device
     // something is mapped onto, unless `-I`.
-    if !args.ignore_safety_checks {
-        if sysfs.as_deref().and_then(has_children) == Some(true) {
-            anyhow::bail!(
-                "Partitions or virtual mappings on device '{}', not making filesystem (use -I to override)",
-                args.device
-            );
-        }
+    if !args.ignore_safety_checks && sysfs.as_deref().and_then(has_children) == Some(true) {
+        anyhow::bail!(
+            "Partitions or virtual mappings on device '{}', not making filesystem (use -I to override)",
+            args.device
+        );
     }
     // A block device's sector size counts as given (`sector_size_set`), so
     // the Atari variant refuses rather than enlarging its logical sectors.
