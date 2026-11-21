@@ -94,6 +94,13 @@ each is a `gap` issue: #6 `-C`, #7 `-c`/`-l`, #8 `--mbr`, #9 `--offset`,
 - [ ] #10 `-m FILE` boot-sector message (IN PROGRESS 2026-11-20): `BootMessage::encode`
       after dosfstools 4.2 `case 'm'`; `make-golden.sh` now runs where invoked
       (sc-build + SC_BUILD_OUT) and records four `-m` goldens
+      State: code, tests, docs, CHANGELOG pushed (6625808). On a build VM
+      (a0fa12e) all sixteen goldens — the four `-m` ones freshly recorded by
+      mkfs.fat 4.2 — compared identical; clippy then failed on a pre-existing
+      cast (fixed in 6625808), so the golden tar was not carried off. NEXT:
+      rerun the recorder command (README "Golden comparison"), `tar -xf
+      tmp/golden.tar -C tests/golden`, commit the four `*-msg*` goldens,
+      plain `sc-build`, close #10 and build-failure #15
 - [ ] #6 `-C`, #9 `--offset`, #11 `-I`/`-A`/`--codepage`/`--variant`
 - [x] #5 — README stub line listing unbuilt flags removed; the missing flags
       were already absent from the CLI; each filed as a `gap` issue (2026-11-19)
