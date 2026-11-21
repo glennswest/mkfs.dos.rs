@@ -58,9 +58,10 @@ to find out why it is there.
 
 Ships as a library by git tag only — not on crates.io, not a stormcentral
 component (no container, port or config). The CLI flags and their divergences
-from `mkfs.fat` (`-H` for hidden sectors, `--fixed`, `--dry-run`) are tabled in README.
+from `mkfs.fat` (`-H` for hidden sectors, `--fixed`, `--dry-run`) are tabled in README,
+with `--mbr`, whose `auto` reads Linux sysfs as `mkfs.fat` does.
 The `mkfs.fat` flags not built are absent from the CLI (unknown flag) and
-each is a `gap` issue: #6 `-C`, #7 `-c`/`-l`, #8 `--mbr`, #9 `--offset`,
+each is a `gap` issue: #6 `-C`, #7 `-c`/`-l`, #9 `--offset`,
 #10 `-m`, #11 `-I`/`-A`/`--codepage`/`--variant`.
 
 ## Work plan
@@ -73,7 +74,8 @@ each is a `gap` issue: #6 `-C`, #7 `-c`/`-l`, #8 `--mbr`, #9 `--offset`,
       the 4085 / 65525 cluster thresholds, alignment
 - [x] `format` — the formatter
 - [x] Golden references captured from real `mkfs.fat --invariant`; byte-exact
-      across sixteen configurations, FAT12 through FAT32 (four with `-m`)
+      across twenty-four configurations, FAT12 through FAT32 (four with `-m`,
+      eight with `--mbr`)
 - [x] `fs` — the read layer (boot sector, FAT chains, directories)
 - [x] `fsck` — chain validation, cross-links, lost clusters, FSInfo
 - [x] CLI binaries `mkfs-fat`, `fsck-fat`
@@ -100,8 +102,13 @@ each is a `gap` issue: #6 `-C`, #7 `-c`/`-l`, #8 `--mbr`, #9 `--offset`,
       count is refused (`checked_mul`), not wrapped into a size that fits; one test,
       sc-build 4f42938 passed (76 lib + 2 mkfs-fat unit tests, 16 goldens)
 - [ ] #7 Bad block list (`-c`, `-l`), which marks clusters `0x…fff7`
-- [ ] #8 An MBR partition table in the boot sector (`--mbr`), for a whole-disk
-      image Windows should recognise
+- [x] #8 `--mbr[=y|n|a]` (2026-11-21): `FakeMbr` after dosfstools 4.2
+      `setup_tables()` (signature at 440, one active entry at 446, message cut
+      at 439); CLI `auto` as `get_device_info()` (fixed whole-disk block device
+      only). Eight `--mbr=y` goldens recorded by mkfs.fat 4.2 on a build VM,
+      one per partition type (0x01/0x04/0x06/0x0e/0x0c) plus two long-message
+      cases; sc-build 191a594 passed (84 lib + 4 mkfs-fat unit tests, 24
+      goldens byte-identical, clippy clean)
 - [x] #10 `-m FILE` boot-sector message (2026-11-20/21): `BootMessage::encode`
       after dosfstools 4.2 `case 'm'`; four `-m` goldens recorded by mkfs.fat
       4.2 on a build VM (`make-golden.sh` via sc-build + SC_BUILD_OUT); all
