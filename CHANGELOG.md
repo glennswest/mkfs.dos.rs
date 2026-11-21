@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### 2026-11-21
+- **fix:** `mkfs-fat DEVICE BLOCKS` refuses a block count whose byte size
+  overflows `u64`, instead of wrapping it (in a release build) into a smaller
+  size that fits the device and formatting that (#17, finding 622740cebc3e).
 - **fix:** fsck: a corrupt FSInfo signature is reported (`fsinfo-signature`,
   exit 4) with the rest of the check, instead of failing the whole check in
   pass 4 with exit 8; a device read error still stops it (#18, finding

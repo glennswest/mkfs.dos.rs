@@ -96,6 +96,8 @@ each is a `gap` issue: #6 `-C`, #7 `-c`/`-l`, #8 `--mbr`, #9 `--offset`,
       keeps the report, a7421a18bea9 rebuilt FSInfo gets the count,
       7b5fc59b4073 sector sizes 512–32768 open again, dca70d906ff2 read-only
       check open, 8a2452f8f3a5 `-M`/`-D` past 0xff refused; one test each
+- [x] #17 review finding (2026-11-21): 622740cebc3e an overflowing `BLOCKS`
+      count is refused (`checked_mul`), not wrapped into a size that fits; one test
 - [ ] #7 Bad block list (`-c`, `-l`), which marks clusters `0x…fff7`
 - [ ] #8 An MBR partition table in the boot sector (`--mbr`), for a whole-disk
       image Windows should recognise

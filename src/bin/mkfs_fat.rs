@@ -123,6 +123,23 @@ fn parse_hex_u8(name: &str, s: &str) -> anyhow::Result<u8> {
     u8::try_from(v).map_err(|_| anyhow::anyhow!("invalid {name} '{s}': {v:#x} is more than 0xff"))
 }
 
+/// The size to format: `blocks` 1024-byte blocks, or the whole device. A
+/// count whose byte size overflows `u64` or exceeds the device is refused
+/// before anything is written (finding 622740cebc3e: it used to wrap in a
+/// release build, so 2^54 + 65536 blocks formatted 64 MiB).
+fn format_size(blocks: Option<u64>, device: &str, device_size: u64) -> anyhow::Result<u64> {
+    let Some(b) = blocks else {
+        return Ok(device_size);
+    };
+    let size = b.checked_mul(1024).ok_or_else(|| {
+        anyhow::anyhow!("{b} blocks is more bytes than a u64 holds; {device} holds {device_size}")
+    })?;
+    if size > device_size {
+        anyhow::bail!("{b} blocks is {size} bytes; {device} holds {device_size}");
+    }
+    Ok(size)
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
@@ -183,18 +200,7 @@ async fn main() -> anyhow::Result<()> {
 
     // A block count names a filesystem of that size inside the device, which is
     // how `mkfs.fat` takes it — 1024-byte blocks, whatever the sector size.
-    let size = args
-        .blocks
-        .map(|b| b * 1024)
-        .unwrap_or_else(|| device.size());
-    if size > device.size() {
-        anyhow::bail!(
-            "{} blocks is {size} bytes; {} holds {}",
-            args.blocks.unwrap_or(0),
-            args.device,
-            device.size()
-        );
-    }
+    let size = format_size(args.blocks, &args.device, device.size())?;
 
     let geometry = Geometry::compute(size, device.logical_sector_size(), &params)?;
 
@@ -271,5 +277,19 @@ mod tests {
         assert_eq!(parse_hex_u8("media byte", "0xff").unwrap(), 0xff);
         assert!(parse_hex_u8("media byte", "0x1f8").is_err());
         assert!(parse_hex_u8("drive number", "0x180").is_err());
+    }
+
+    // Finding 622740cebc3e: a block count whose byte size overflows is
+    // refused, not wrapped into a smaller size that fits the device.
+    #[test]
+    fn an_overflowing_block_count_is_refused() {
+        let dev = 64 << 20;
+        assert_eq!(format_size(None, "img", dev).unwrap(), dev);
+        assert_eq!(format_size(Some(65536), "img", dev).unwrap(), dev);
+        assert!(format_size(Some(65537), "img", dev).is_err());
+        // (2^54 + 65536) * 1024 wraps to exactly 64 MiB.
+        assert_eq!(((1u64 << 54) + 65536).wrapping_mul(1024), dev);
+        assert!(format_size(Some((1 << 54) + 65536), "img", dev).is_err());
+        assert!(format_size(Some(u64::MAX), "img", dev).is_err());
     }
 }
