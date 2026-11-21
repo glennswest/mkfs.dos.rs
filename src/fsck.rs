@@ -22,7 +22,14 @@
 //!   data was for, which a library should not make on a caller's behalf. The
 //!   clusters and their contents are reported before they are freed.
 //! - **A cross-linked chain is never repaired.** Two files claiming one cluster
-//!   means one of them is already wrong, and no rule chooses which.
+//!   means one of them is already wrong, and no rule chooses which. Nor is
+//!   either file's size: a walk stopped by the cross-link is not a length.
+//!
+//! And two it holds back on, because the target is not known to be what it
+//! seems: lost clusters are freed only when every directory was read (a
+//! directory that was not may own them), and the FAT32 backup boot sector and
+//! FSInfo sector are written only when the boot sector's pointers to them are
+//! distinct sectors inside the reserved area.
 
 use std::collections::HashMap;
 
@@ -186,10 +193,10 @@ pub async fn check_filesystem<D: BlockDevice>(
         ..Default::default()
     };
 
-    pass1_boot_sector(fs, options, &mut report).await?;
+    let pointers = pass1_boot_sector(fs, options, &mut report).await?;
     let fat = pass2_fats(fs, options, &mut report).await?;
-    let owners = pass3_directories(fs, options, &mut report, &fat).await?;
-    pass4_allocation(fs, options, &mut report, &fat, &owners).await?;
+    let ownership = pass3_directories(fs, options, &mut report, &fat).await?;
+    pass4_allocation(fs, options, &mut report, &fat, &ownership, pointers).await?;
 
     if options.repair {
         fs.flush().await?;
@@ -197,12 +204,80 @@ pub async fn check_filesystem<D: BlockDevice>(
     Ok(report)
 }
 
+/// Which of the FAT32 metadata sectors the boot sector names may be read as
+/// what it says they are, and written to by a repair.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct MetadataPointers {
+    /// The backup boot sector is inside the reserved area and clear of the
+    /// boot sector and the FSInfo sector.
+    backup_boot: bool,
+    /// The FSInfo sector is inside the reserved area and clear of the boot
+    /// sector.
+    info_sector: bool,
+}
+
+/// Check the backup boot sector and FSInfo pointers before anything trusts
+/// them.
+///
+/// Both name sectors of the reserved area. A pointer past it lands in a FAT or
+/// in file data, and a repair that wrote "the backup boot sector" there would
+/// overwrite live allocation entries or a file's contents — so a pointer that
+/// does not stay inside the reserved area, or that collides with the boot
+/// sector or with the other pointer, is reported and never written through.
+/// Zero means "none", as `fs` and `mkfs.fat` treat it.
+fn check_metadata_pointers(boot: &BootSector, report: &mut FsckReport) -> MetadataPointers {
+    let reserved = boot.reserved_sectors as u32;
+    let info = boot.info_sector as u32;
+    let backup = boot.backup_boot as u32;
+
+    let info_ok = info != 0 && info < reserved;
+    if info != 0 && !info_ok {
+        report.note(
+            1,
+            "fsinfo-pointer",
+            Severity::Serious,
+            format!(
+                "the boot sector puts the FSInfo sector at sector {info}, outside the {reserved} reserved sectors; it is not read or written"
+            ),
+        );
+    }
+
+    let mut backup_ok = backup != 0 && backup < reserved;
+    if backup != 0 && !backup_ok {
+        report.note(
+            1,
+            "backup-boot-pointer",
+            Severity::Serious,
+            format!(
+                "the boot sector puts its backup at sector {backup}, outside the {reserved} reserved sectors; it is not read or written"
+            ),
+        );
+    } else if backup_ok && info != 0 && backup == info {
+        backup_ok = false;
+        report.note(
+            1,
+            "backup-boot-pointer",
+            Severity::Serious,
+            format!(
+                "the boot sector puts both its backup and the FSInfo sector at sector {backup}; neither copy is written"
+            ),
+        );
+    }
+
+    MetadataPointers {
+        backup_boot: backup_ok,
+        // FSInfo shares a sector with the backup: writing one would destroy
+        // the other, so neither is written.
+        info_sector: info_ok && !(backup != 0 && backup == info),
+    }
+}
+
 /// Pass 1: the boot sector, its backup, and the FSInfo signatures.
 async fn pass1_boot_sector<D: BlockDevice>(
     fs: &Filesystem<D>,
     options: &FsckOptions,
     report: &mut FsckReport,
-) -> Result<()> {
+) -> Result<MetadataPointers> {
     let boot = fs.boot();
 
     if boot.media < 0xf0 {
@@ -214,8 +289,11 @@ async fn pass1_boot_sector<D: BlockDevice>(
         );
     }
 
+    let mut pointers = MetadataPointers::default();
     if fs.fat_type() == FatType::Fat32 {
-        if boot.backup_boot != 0 {
+        pointers = check_metadata_pointers(boot, report);
+
+        if pointers.backup_boot {
             let mut buf = vec![0u8; 512];
             let off = boot.sector_offset(boot.backup_boot as u64);
             fs.device().read_at(off, &mut buf).await?;
@@ -235,7 +313,10 @@ async fn pass1_boot_sector<D: BlockDevice>(
                             boot.backup_boot
                         ),
                     );
-                    if options.repair {
+                    // A boot sector with a bad FSInfo pointer is itself
+                    // damaged, and is not copied over its backup.
+                    let sane = boot.info_sector == 0 || pointers.info_sector;
+                    if options.repair && sane {
                         let mut sector = vec![0u8; boot.bytes_per_sector as usize];
                         boot.encode(&mut sector);
                         fs.device().write_at(off, &sector).await?;
@@ -245,7 +326,7 @@ async fn pass1_boot_sector<D: BlockDevice>(
             }
         }
 
-        if fs.read_fsinfo().await.is_err() {
+        if pointers.info_sector && fs.read_fsinfo().await.is_err() {
             let idx = report.note(
                 1,
                 "fsinfo-signature",
@@ -268,7 +349,7 @@ async fn pass1_boot_sector<D: BlockDevice>(
         }
     }
 
-    Ok(())
+    Ok(pointers)
 }
 
 /// Pass 2: every FAT entry is in range, and every FAT says the same thing.
@@ -356,17 +437,29 @@ async fn pass2_fats<D: BlockDevice>(
     Ok(fat)
 }
 
+/// What pass 3 learned about who owns each cluster.
+struct Ownership {
+    /// For every claimed cluster, the name of whatever owns it.
+    owners: HashMap<u32, String>,
+    /// Every directory was read and every entry in it visited. When this is
+    /// false, a cluster missing from `owners` may belong to a file in the part
+    /// of the tree that could not be read, and nothing proves it lost.
+    complete: bool,
+}
+
 /// Pass 3: walk the directory tree from the root.
 ///
 /// Returns, for every cluster, the name of whatever owns it — which is what
-/// pass 4 needs to tell a lost chain from an allocated one.
+/// pass 4 needs to tell a lost chain from an allocated one — and whether the
+/// walk saw the whole tree.
 async fn pass3_directories<D: BlockDevice>(
     fs: &Filesystem<D>,
     options: &FsckOptions,
     report: &mut FsckReport,
     fat: &[u8],
-) -> Result<HashMap<u32, String>> {
+) -> Result<Ownership> {
     let mut owners: HashMap<u32, String> = HashMap::new();
+    let mut complete = true;
     // Directories still to visit: path, the cluster it starts at (`None` for
     // the fixed root), and the cluster its parent starts at — which is what
     // ".." has to agree with.
@@ -380,14 +473,17 @@ async fn pass3_directories<D: BlockDevice>(
         // A directory's own chain is claimed here, when it is visited, and
         // never in its parent. Claiming it in both places would report every
         // directory on the volume as cross-linked with itself.
+        // A directory whose own chain is broken or shared may be read as
+        // something other than what it holds, so what it names is not the
+        // whole story either.
         let own_cluster = match start {
             Some(cluster) => {
-                claim_chain(fs, fat, report, &mut owners, cluster, &path, 3);
+                complete &= claim_chain(fs, fat, report, &mut owners, cluster, &path, 3).complete;
                 cluster
             }
             None if fs.fat_type() == FatType::Fat32 => {
                 let root = fs.boot().root_cluster;
-                claim_chain(fs, fat, report, &mut owners, root, &path, 3);
+                complete &= claim_chain(fs, fat, report, &mut owners, root, &path, 3).complete;
                 root
             }
             None => 0,
@@ -402,6 +498,7 @@ async fn pass3_directories<D: BlockDevice>(
                     Severity::Serious,
                     format!("{path} cannot be read: {e}"),
                 );
+                complete = false;
                 continue;
             }
         };
@@ -520,6 +617,8 @@ async fn pass3_directories<D: BlockDevice>(
                         Severity::Serious,
                         format!("{child} is a directory that owns no clusters"),
                     );
+                    // Its entries, wherever they went, are not walked.
+                    complete = false;
                 }
                 if !is_dir {
                     report.files += 1;
@@ -537,6 +636,9 @@ async fn pass3_directories<D: BlockDevice>(
                         fs.max_cluster()
                     ),
                 );
+                if is_dir {
+                    complete = false;
+                }
                 continue;
             }
 
@@ -553,11 +655,18 @@ async fn pass3_directories<D: BlockDevice>(
                     queue.push((child.clone(), Some(cluster), cluster_for_dotdot(fs, own_cluster, is_root)));
                 }
             } else {
-                let claimed = claim_chain(fs, fat, report, &mut owners, cluster, &child, 3);
+                let walk = claim_chain(fs, fat, report, &mut owners, cluster, &child, 3);
                 report.files += 1;
+                let claimed = walk.claimed;
                 let capacity = claimed as u64 * fs.cluster_size() as u64;
                 let lowest = capacity.saturating_sub(fs.cluster_size() as u64);
-                if (entry.size as u64) > capacity || (entry.size as u64) <= lowest {
+                // Only a chain walked to its end says how long the file is. A
+                // walk stopped by a cross-link, a loop, a bad cluster or a
+                // link out of range counted part of it, and has already been
+                // reported; the size is left as it is.
+                if walk.complete
+                    && ((entry.size as u64) > capacity || (entry.size as u64) <= lowest)
+                {
                     let idx = report.note(
                         3,
                         "size-mismatch",
@@ -581,7 +690,7 @@ async fn pass3_directories<D: BlockDevice>(
         }
     }
 
-    Ok(owners)
+    Ok(Ownership { owners, complete })
 }
 
 /// Pass 4: everything allocated but unowned, and the free counts.
@@ -590,8 +699,10 @@ async fn pass4_allocation<D: BlockDevice>(
     options: &FsckOptions,
     report: &mut FsckReport,
     fat: &[u8],
-    owners: &HashMap<u32, String>,
+    ownership: &Ownership,
+    pointers: MetadataPointers,
 ) -> Result<()> {
+    let owners = &ownership.owners;
     let fat_type = fs.fat_type();
     let max = fs.max_cluster();
     let mut fat = fat.to_vec();
@@ -623,28 +734,42 @@ async fn pass4_allocation<D: BlockDevice>(
         // Report the chains, not the clusters: "three lost chains" is a fact a
         // person can act on, "1,183 lost clusters" is a number.
         let chains = count_chains(&fat, fat_type, &lost);
-        let idx = report.note(
-            4,
-            "lost-clusters",
-            Severity::Fixable,
-            format!(
-                "{} clusters in {chains} chain{} are allocated but belong to no file",
-                lost.len(),
-                if chains == 1 { "" } else { "s" }
-            ),
-        );
-        if options.repair {
-            for &cluster in &lost {
-                fat::set_entry(&mut fat, fat_type, cluster, 0);
-                write_fat_entry(fs, &mut fat, cluster, 0).await?;
+        let plural = if chains == 1 { "" } else { "s" };
+        if !ownership.complete {
+            // Part of the tree went unread, so these may be the files in it.
+            // Freeing them would erase data that nothing proved lost.
+            report.note(
+                4,
+                "lost-clusters-unverified",
+                Severity::Serious,
+                format!(
+                    "{} clusters in {chains} chain{plural} are allocated but belong to no file that could be read; part of the directory tree could not be walked, so they are not freed",
+                    lost.len()
+                ),
+            );
+        } else {
+            let idx = report.note(
+                4,
+                "lost-clusters",
+                Severity::Fixable,
+                format!(
+                    "{} clusters in {chains} chain{plural} are allocated but belong to no file",
+                    lost.len()
+                ),
+            );
+            if options.repair {
+                for &cluster in &lost {
+                    fat::set_entry(&mut fat, fat_type, cluster, 0);
+                    write_fat_entry(fs, &mut fat, cluster, 0).await?;
+                }
+                report.problems[idx].fixed = true;
+                report.clusters_used -= lost.len() as u32;
+                report.clusters_free += lost.len() as u32;
             }
-            report.problems[idx].fixed = true;
-            report.clusters_used -= lost.len() as u32;
-            report.clusters_free += lost.len() as u32;
         }
     }
 
-    if fat_type == FatType::Fat32 {
+    if fat_type == FatType::Fat32 && pointers.info_sector {
         if let Some(info) = fs.read_fsinfo().await? {
             let free = report.clusters_free;
             if info.free_clusters != free && info.free_clusters != crate::structs::fsinfo::UNKNOWN {
@@ -693,6 +818,17 @@ fn cluster_for_dotdot<D: BlockDevice>(_fs: &Filesystem<D>, own_cluster: u32, is_
     }
 }
 
+/// What a chain walk found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ChainWalk {
+    /// Clusters this walk claimed — the ones no one owned before it.
+    claimed: u32,
+    /// The walk reached the end-of-chain marker with nothing in its way, so
+    /// `claimed` is the chain's length. False when a cross-link, a loop, a
+    /// bad cluster or a link out of range stopped it part way.
+    complete: bool,
+}
+
 /// Walk a chain, recording who owns each cluster and reporting a cluster that
 /// two owners both claim.
 fn claim_chain<D: BlockDevice>(
@@ -703,7 +839,7 @@ fn claim_chain<D: BlockDevice>(
     start: u32,
     owner: &str,
     pass: u8,
-) -> u32 {
+) -> ChainWalk {
     let fat_type = fs.fat_type();
     let mut cluster = start;
     let mut count = 0u32;
@@ -711,7 +847,7 @@ fn claim_chain<D: BlockDevice>(
 
     loop {
         if !fs.is_data_cluster(cluster) {
-            return count;
+            return ChainWalk { claimed: count, complete: false };
         }
         if let Some(other) = owners.get(&cluster) {
             report.note(
@@ -720,7 +856,7 @@ fn claim_chain<D: BlockDevice>(
                 Severity::Serious,
                 format!("cluster {cluster} is claimed by both {other} and {owner}"),
             );
-            return count;
+            return ChainWalk { claimed: count, complete: false };
         }
         owners.insert(cluster, owner.to_string());
         count += 1;
@@ -731,12 +867,12 @@ fn claim_chain<D: BlockDevice>(
                 Severity::Serious,
                 format!("the chain of {owner} does not end"),
             );
-            return count;
+            return ChainWalk { claimed: count, complete: false };
         }
 
         let next = fat::get_entry(fat, fat_type, cluster);
         if fat_type.is_end_of_chain(next) {
-            return count;
+            return ChainWalk { claimed: count, complete: true };
         }
         if fat_type.is_bad(next) {
             report.note(
@@ -745,7 +881,7 @@ fn claim_chain<D: BlockDevice>(
                 Severity::Serious,
                 format!("the chain of {owner} runs into a cluster marked bad at {cluster}"),
             );
-            return count;
+            return ChainWalk { claimed: count, complete: false };
         }
         if !fs.is_data_cluster(next) {
             report.note(
@@ -757,7 +893,7 @@ fn claim_chain<D: BlockDevice>(
                     fs.max_cluster()
                 ),
             );
-            return count;
+            return ChainWalk { claimed: count, complete: false };
         }
         cluster = next;
     }
@@ -952,6 +1088,181 @@ mod tests {
             .await
             .unwrap();
         assert!(report.is_clean(), "{:?}", report.problems);
+    }
+
+    /// A file or directory entry naming `cluster`.
+    fn entry(name: &[u8; 11], cluster: u32, size: u32, dir: bool) -> DirEntry {
+        let mut e = DirEntry {
+            name: *name,
+            size,
+            ..Default::default()
+        };
+        if dir {
+            e.attr = Attributes::DIRECTORY;
+        }
+        e.set_first_cluster(cluster);
+        e
+    }
+
+    /// Put an entry in slot `slot` of the fixed FAT12/16 root directory.
+    async fn put_root(fs: &Filesystem<MemDevice>, slot: u64, e: &DirEntry) {
+        let mut buf = [0u8; DIR_ENTRY_LEN];
+        e.encode(&mut buf);
+        let off = fs.boot().root_dir_offset() + slot * DIR_ENTRY_LEN as u64;
+        fs.device().write_at(off, &buf).await.unwrap();
+    }
+
+    /// Lay a chain over `clusters`, in order, ending it after the last.
+    async fn chain(fs: &Filesystem<MemDevice>, clusters: &[u32]) {
+        for pair in clusters.windows(2) {
+            fs.set_fat_entry(pair[0], pair[1]).await.unwrap();
+        }
+        let last = *clusters.last().unwrap();
+        fs.set_fat_entry(last, fs.fat_type().eof_marker()).await.unwrap();
+    }
+
+    /// The size field of root slot `slot`, read back from the device.
+    async fn root_size(fs: &Filesystem<MemDevice>, slot: u64) -> u32 {
+        let mut buf = [0u8; DIR_ENTRY_LEN];
+        let off = fs.boot().root_dir_offset() + slot * DIR_ENTRY_LEN as u64;
+        fs.device().read_at(off, &mut buf).await.unwrap();
+        DirEntry::decode(&buf).size
+    }
+
+    // Finding 385d8a31c15b: a directory that cannot be read hides its files,
+    // and the clusters they own must not then be freed as lost.
+    #[tokio::test]
+    async fn files_under_an_unreadable_directory_are_not_freed() {
+        let fs = fresh(64 * MIB).await;
+        let cs = fs.cluster_size();
+
+        // /SUB at cluster 20 holds FILE, clusters 30-31.
+        let mut dir = vec![0u8; cs as usize];
+        entry(b".          ", 20, 0, true).encode(&mut dir[0..32]);
+        entry(b"..         ", 0, 0, true).encode(&mut dir[32..64]);
+        entry(b"FILE    BIN", 30, 2 * cs - 5, false).encode(&mut dir[64..96]);
+        fs.write_cluster(20, &dir).await.unwrap();
+        chain(&fs, &[30, 31]).await;
+        chain(&fs, &[20]).await;
+        put_root(&fs, 1, &entry(b"SUB        ", 20, 0, true)).await;
+
+        // Intact, it is clean: FILE's clusters are owned.
+        let report = check_filesystem(&fs, &FsckOptions::check_only()).await.unwrap();
+        assert!(report.is_clean(), "{:?}", report.problems);
+
+        // Now SUB's chain loops on itself, so it cannot be read.
+        fs.set_fat_entry(20, 20).await.unwrap();
+        let report = check_filesystem(&fs, &FsckOptions::repair()).await.unwrap();
+        let found = codes(&report);
+        assert!(found.contains(&"directory-unreadable"), "{found:?}");
+        assert!(found.contains(&"lost-clusters-unverified"), "{found:?}");
+        assert!(!found.contains(&"lost-clusters"), "{found:?}");
+        assert_eq!(report.exit_code(), 4);
+        // FILE's chain is still there in every FAT.
+        assert_eq!(fs.fat_entry(30).await.unwrap(), 31);
+        assert!(fs.fat_type().is_end_of_chain(fs.fat_entry(31).await.unwrap()));
+        assert_eq!(fs.read_fat(0).await.unwrap(), fs.read_fat(1).await.unwrap());
+    }
+
+    // Finding 95237131f4a2: a chain walk stopped by a cross-link is not the
+    // file's length, and must not be written into its size.
+    #[tokio::test]
+    async fn a_cross_linked_file_keeps_its_size() {
+        let fs = fresh(64 * MIB).await;
+        let cs = fs.cluster_size();
+
+        // A and B start at the same cluster.
+        chain(&fs, &[40, 41]).await;
+        put_root(&fs, 1, &entry(b"A       BIN", 40, 2 * cs - 10, false)).await;
+        put_root(&fs, 2, &entry(b"B       BIN", 40, 2 * cs - 20, false)).await;
+        // C runs into D's chain half way.
+        chain(&fs, &[50, 51, 52]).await;
+        chain(&fs, &[60, 61]).await;
+        fs.set_fat_entry(61, 51).await.unwrap();
+        put_root(&fs, 3, &entry(b"D       BIN", 50, 3 * cs - 1, false)).await;
+        put_root(&fs, 4, &entry(b"C       BIN", 60, 4 * cs - 1, false)).await;
+
+        let report = check_filesystem(&fs, &FsckOptions::repair()).await.unwrap();
+        let found = codes(&report);
+        assert!(found.contains(&"cross-linked"), "{found:?}");
+        assert!(!found.contains(&"size-mismatch"), "{found:?}");
+        assert_eq!(report.exit_code(), 4);
+        assert_eq!(root_size(&fs, 1).await, 2 * cs - 10);
+        assert_eq!(root_size(&fs, 2).await, 2 * cs - 20);
+        assert_eq!(root_size(&fs, 3).await, 3 * cs - 1);
+        assert_eq!(root_size(&fs, 4).await, 4 * cs - 1);
+    }
+
+    #[tokio::test]
+    async fn a_wrong_size_on_a_whole_chain_is_still_repaired() {
+        let fs = fresh(64 * MIB).await;
+        let cs = fs.cluster_size();
+        chain(&fs, &[40, 41]).await;
+        put_root(&fs, 1, &entry(b"A       BIN", 40, 5 * cs, false)).await;
+
+        let report = check_filesystem(&fs, &FsckOptions::repair()).await.unwrap();
+        assert!(report.problems.iter().any(|p| p.code == "size-mismatch" && p.fixed));
+        assert_eq!(root_size(&fs, 1).await, 2 * cs);
+    }
+
+    /// Reopen `fs` with its boot sector changed by `edit`.
+    async fn with_boot(
+        fs: Filesystem<MemDevice>,
+        edit: impl FnOnce(&mut BootSector),
+    ) -> Filesystem<MemDevice> {
+        let dev = fs.into_device();
+        let mut boot = fs_boot(&dev).await;
+        edit(&mut boot);
+        let mut sector = vec![0u8; boot.bytes_per_sector as usize];
+        boot.encode(&mut sector);
+        dev.write_at(0, &sector).await.unwrap();
+        Filesystem::open(dev).await.unwrap()
+    }
+
+    async fn fs_boot(dev: &MemDevice) -> BootSector {
+        let mut buf = vec![0u8; 512];
+        dev.read_at(0, &mut buf).await.unwrap();
+        BootSector::decode(&buf).unwrap()
+    }
+
+    // Finding c6b6e031797c: a backup boot sector or FSInfo pointer that leaves
+    // the reserved area names a FAT or file data, and repair must not write
+    // through it.
+    #[tokio::test]
+    async fn metadata_pointers_outside_the_reserved_area_are_never_written() {
+        let cases: [(&str, fn(&mut BootSector)); 3] = [
+            // The first FAT.
+            ("backup-boot-pointer", |b| b.backup_boot = b.reserved_sectors),
+            // Deep in the data area.
+            ("fsinfo-pointer", |b| b.info_sector = 40_000),
+            // Both on one sector.
+            ("backup-boot-pointer", |b| b.backup_boot = b.info_sector),
+        ];
+        for (code, edit) in cases {
+            let fs = with_boot(fresh(1024 * MIB).await, edit).await;
+            let before = fs.device().to_vec();
+
+            let report = check_filesystem(&fs, &FsckOptions::repair()).await.unwrap();
+            assert!(
+                report.problems.iter().any(|p| p.code == code && !p.fixed),
+                "{code}: {:?}",
+                report.problems
+            );
+            assert_eq!(report.exit_code(), 4, "{code}");
+            assert!(before == fs.device().to_vec(), "{code}: repair wrote to the image");
+        }
+    }
+
+    #[tokio::test]
+    async fn fsinfo_is_never_written_through_a_bad_pointer() {
+        let fs = with_boot(fresh(1024 * MIB).await, |b| b.info_sector = b.reserved_sectors).await;
+        let before = fs.device().to_vec();
+        let info = FsInfo {
+            free_clusters: 1,
+            next_cluster: 2,
+        };
+        assert!(fs.write_fsinfo(&info).await.is_err());
+        assert!(before == fs.device().to_vec());
     }
 
     #[tokio::test]

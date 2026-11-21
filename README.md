@@ -92,7 +92,14 @@ be repaired) and `-v` (report unusual-but-legal findings too). Exit codes are
 `fsck.fat`'s: 0 clean, 1 errors corrected, 4 errors left uncorrected, 8 the
 check could not run. Repair differs from `fsck.fat -a` in two places: a lost
 chain is freed rather than saved as `FSCK0000.REC`, and a cross-linked chain
-is reported and never repaired.
+is reported and never repaired — nor is the size of a file whose chain is
+cross-linked, looped or broken, since a partial walk is not its length.
+Repair also holds back where it cannot be sure of its target: a lost chain is
+only freed when the whole directory tree was read (otherwise it is reported as
+`lost-clusters-unverified`), and the FAT32 backup boot sector and FSInfo are
+only written when the boot sector's pointers to them stay inside the reserved
+area and clear of each other (otherwise `backup-boot-pointer` /
+`fsinfo-pointer`, and nothing is written there).
 
 ## Why
 

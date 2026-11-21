@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### 2026-11-21
+- **fix:** fsck: lost clusters are not freed after an incomplete directory walk
+  (an unreadable directory, a broken directory chain, a directory entry with no
+  or an out-of-range start); reported as `lost-clusters-unverified` instead
+  (#12, finding 385d8a31c15b).
+- **fix:** fsck: a file's size is repaired only from a chain walked to its end;
+  a cross-linked, looped or broken chain leaves the size alone (#12, finding
+  95237131f4a2).
+- **fix:** fsck: the FAT32 backup boot sector and FSInfo pointers are checked
+  against the reserved area and each other before anything is read or written
+  through them (`backup-boot-pointer`, `fsinfo-pointer`); `write_fsinfo`
+  refuses a pointer outside it (#12, finding c6b6e031797c).
+
 ### 2026-11-20
 - **feat:** `mkfs-fat -m FILE` (`-` for standard input) replaces the boot
   sector's `This is not a bootable disk` message, encoded as `mkfs.fat 4.2`

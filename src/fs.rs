@@ -336,13 +336,27 @@ impl<D: BlockDevice> Filesystem<D> {
         if self.fat_type != FatType::Fat32 || self.boot.info_sector == 0 {
             return Ok(());
         }
+        // Both pointers come from the boot sector, which may be damaged. One
+        // that leaves the reserved area names a FAT or file data, and is never
+        // written through.
+        let reserved = self.boot.reserved_sectors as u32;
+        let info_sector = self.boot.info_sector as u32;
+        let backup_boot = self.boot.backup_boot as u32;
+        if info_sector >= reserved || info_sector == backup_boot {
+            return Err(Error::corrupt(
+                "boot sector",
+                format!(
+                    "the FSInfo sector {info_sector} is not a sector of its own in the {reserved} reserved sectors"
+                ),
+            ));
+        }
         let mut buf = vec![0u8; self.boot.bytes_per_sector as usize];
         info.encode(&mut buf);
-        let off = self.boot.sector_offset(self.boot.info_sector as u64);
+        let off = self.boot.sector_offset(info_sector as u64);
         self.device.write_at(off, &buf).await?;
 
-        let backup = self.boot.backup_boot as u32 + self.boot.info_sector as u32;
-        if self.boot.backup_boot != 0 && backup < self.boot.reserved_sectors as u32 {
+        let backup = backup_boot + info_sector;
+        if backup_boot != 0 && backup < reserved {
             self.device
                 .write_at(self.boot.sector_offset(backup as u64), &buf)
                 .await?;
