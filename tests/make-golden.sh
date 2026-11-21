@@ -60,6 +60,20 @@ CASES=(
     "fat32-1g-mbr:1048576:--mbr=y"
     "fat16-16m-msg-long-mbr:16384:-m $GOLDEN/msg-long.txt --mbr=y"
     "fat32-512m-msg-long-mbr:524288:-m $GOLDEN/msg-long.txt --mbr=y"
+    # -A / --variant atari (#11): GEMDOS's boot sector and geometry. FAT12 on
+    # the floppy sector counts, FAT16 otherwise, FAT32 from 512 MiB; logical
+    # sectors doubled past 65531 sectors (2 KiB at 64 MiB, 16 KiB at 512 MiB)
+    # or past a FAT too big for its entries (-F 12 at 8 MiB); -S fixing it;
+    # a label (root entry only); a fake MBR without 0xAA55.
+    "atari-720k:720:-A"
+    "atari-1440k:1440:-A"
+    "atari-16m:16384:-A"
+    "atari-64m:65536:-A"
+    "atari-64m-label:65536:--variant atari -n GEMDOS"
+    "atari-8m-f12:8192:-A -F 12"
+    "atari-32m-s2048:32768:-A -S 2048"
+    "atari-512m:524288:-A"
+    "atari-16m-mbr:16384:-A --mbr=y"
 )
 
 for case in "${CASES[@]}"; do
