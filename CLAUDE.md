@@ -62,7 +62,7 @@ from `mkfs.fat` (`-H` for hidden sectors, `--fixed`, `--dry-run`) are tabled in 
 with `--mbr`, whose `auto` reads Linux sysfs as `mkfs.fat` does.
 The `mkfs.fat` flags not built are absent from the CLI (unknown flag) and
 each is a `gap` issue: #6 `-C`, #7 `-c`/`-l`, #9 `--offset`,
-#10 `-m`, #11 `-I`/`-A`/`--codepage`/`--variant`.
+#11 `--codepage` (`-I`, `-A`, `--variant` are built).
 
 ## Work plan
 
@@ -121,7 +121,21 @@ each is a `gap` issue: #6 `-C`, #7 `-c`/`-l`, #9 `--offset`,
       after dosfstools 4.2 `case 'm'`; four `-m` goldens recorded by mkfs.fat
       4.2 on a build VM (`make-golden.sh` via sc-build + SC_BUILD_OUT); all
       sixteen byte-identical at 6c1dae9
-- [ ] #6 `-C`, #9 `--offset`, #11 `-I`/`-A`/`--codepage`/`--variant`
+- [x] #11 `-A` / `--variant` and `-I` (2026-11-21): the Atari branch of
+      dosfstools 4.2 `setup_tables()` (`60 1c 'm'`, `kdosf` + 24-bit serial,
+      no EBR but the drive number, no `0xAA55`; FAT12 only at floppy sector
+      counts, logical sectors doubled to <= 65531 / 16 KiB); `-A` toggles in
+      command-line order; `-I` over `get_block_linux_info()`'s
+      `has_children`. Nine `atari-*` goldens recorded by mkfs.fat 4.2 on a
+      build VM; sc-build 837eb60 passed (92 lib + 6 mkfs-fat unit tests, 33
+      goldens byte-identical, clippy clean). fio.dos.rs#21 asks for the rev
+      bump. Reading Atari volumes back is #21 here
+- [ ] #11 `--codepage`: 4.2 on x86 refuses every non-ASCII label (signed
+      `char` in `validate_volume_label`, fixed upstream in c888797b1d after
+      4.2), so for every label 4.2 accepts the bytes are the same whatever
+      the codepage. Waiting on an owner decision on what to build
+- [ ] #21 fs / fsck-fat: open Atari volumes (no `0xAA55`)
+- [ ] #6 `-C`, #9 `--offset`
 - [x] #5 — README stub line listing unbuilt flags removed; the missing flags
       were already absent from the CLI; each filed as a `gap` issue (2026-11-19)
 - [x] #1 — kernel verification runnable without a local build or root
