@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-### 2026-11-21
+### 2026-11-20
 - **fix:** fsck: lost clusters are not freed after an incomplete directory walk
   (an unreadable directory, a broken directory chain, a directory entry with no
   or an out-of-range start); reported as `lost-clusters-unverified` instead
@@ -14,8 +14,6 @@
   against the reserved area and each other before anything is read or written
   through them (`backup-boot-pointer`, `fsinfo-pointer`); `write_fsinfo`
   refuses a pointer outside it (#12, finding c6b6e031797c).
-
-### 2026-11-20
 - **feat:** `mkfs-fat -m FILE` (`-` for standard input) replaces the boot
   sector's `This is not a bootable disk` message, encoded as `mkfs.fat 4.2`
   reads it: CR and NUL dropped, LF -> CR LF mid-line, tabs to 8 columns, cut at

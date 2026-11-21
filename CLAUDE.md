@@ -88,7 +88,7 @@ each is a `gap` issue: #6 `-C`, #7 `-c`/`-l`, #8 `--mbr`, #9 `--offset`,
       by building a throwaway crate that takes `fio-dos` by git
 - [x] #2, #3 — docs say fio.dos.rs pins a rev, not a tag, and when to ask for
       a bump (2026-10-06)
-- [ ] #12 review findings in `fsck.rs` (2026-11-21): 385d8a31c15b no freeing
+- [ ] #12 review findings in `fsck.rs` (2026-11-20): 385d8a31c15b no freeing
       after an incomplete walk, 95237131f4a2 no size repair from a partial
       chain, c6b6e031797c backup/FSInfo pointers validated — code + tests pushed,
       awaiting sc-build (main's cargo test also needs #10's goldens committed)
