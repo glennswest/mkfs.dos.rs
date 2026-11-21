@@ -425,9 +425,11 @@ impl BootSector {
         }
 
         let bytes_per_sector = get_u16(buf, 11);
-        if !matches!(bytes_per_sector, 512 | 1024 | 2048 | 4096) {
+        // The range `Geometry::compute` formats and `mkfs.fat -S` accepts, so
+        // every volume this crate writes opens again.
+        if !bytes_per_sector.is_power_of_two() || !(512..=32768).contains(&bytes_per_sector) {
             return Err(Error::not_fat(format!(
-                "{bytes_per_sector} bytes per sector is not one of 512, 1024, 2048, 4096"
+                "{bytes_per_sector} bytes per sector is not a power of two between 512 and 32768"
             )));
         }
         let sectors_per_cluster = get_u8(buf, 13);

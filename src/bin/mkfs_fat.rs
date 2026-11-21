@@ -116,6 +116,13 @@ fn parse_hex(name: &str, s: &str) -> anyhow::Result<u32> {
         .map_err(|e| anyhow::anyhow!("invalid {name} '{s}': {e}"))
 }
 
+/// A one-byte field (`-M`, `-D`): a value past 0xff is refused, never cut down
+/// to its low byte.
+fn parse_hex_u8(name: &str, s: &str) -> anyhow::Result<u8> {
+    let v = parse_hex(name, s)?;
+    u8::try_from(v).map_err(|_| anyhow::anyhow!("invalid {name} '{s}': {v:#x} is more than 0xff"))
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
@@ -141,10 +148,10 @@ async fn main() -> anyhow::Result<()> {
         params.volume_id = Some(parse_hex("volume id", id)?);
     }
     if let Some(m) = &args.media {
-        params.media = Some(parse_hex("media byte", m)? as u8);
+        params.media = Some(parse_hex_u8("media byte", m)?);
     }
     if let Some(d) = &args.drive_number {
-        params.drive_number = Some(parse_hex("drive number", d)? as u8);
+        params.drive_number = Some(parse_hex_u8("drive number", d)?);
     }
     if let Some(g) = &args.geometry {
         let (h, s) = g
@@ -191,12 +198,21 @@ async fn main() -> anyhow::Result<()> {
 
     let geometry = Geometry::compute(size, device.logical_sector_size(), &params)?;
 
-    // The two warnings `mkfs.fat` gives, at the two points it gives them: the
-    // message overran the boot code area, and then FAT32's shorter one.
+    // The warnings `mkfs.fat` gives, in its order: the message overran the
+    // boot code area; a sector size past 4096; then FAT32's shorter area.
     if let Some(message) = &message {
         if message.truncated {
             eprintln!("Warning: message too long; truncated");
         }
+    }
+    // mkfs.fat formats sectors up to 32768 bytes and says so above 4096.
+    if geometry.sector_size > 4096 {
+        eprintln!(
+            "Warning: sector size {} > 4096 is non-standard, filesystem may not be usable",
+            geometry.sector_size
+        );
+    }
+    if let Some(message) = &message {
         if geometry.fat_type == FatType::Fat32 && !message.fits_fat32() {
             eprintln!("Warning: message too long; truncated");
         }
@@ -240,4 +256,20 @@ fn print_geometry(g: &Geometry) {
     println!("Media descriptor:     {:#04x}", g.media);
     println!("Geometry:             {} heads, {} sectors per track", g.heads, g.sectors_per_track);
     println!("Aligned:              {}", if g.aligned { "yes" } else { "no" });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Finding 8a2452f8f3a5: -M 0x1f8 and -D 0x180 are refused, not written
+    // as 0xf8 and 0x80.
+    #[test]
+    fn a_byte_option_past_0xff_is_refused() {
+        assert_eq!(parse_hex_u8("media byte", "0xf8").unwrap(), 0xf8);
+        assert_eq!(parse_hex_u8("drive number", "80").unwrap(), 0x80);
+        assert_eq!(parse_hex_u8("media byte", "0xff").unwrap(), 0xff);
+        assert!(parse_hex_u8("media byte", "0x1f8").is_err());
+        assert!(parse_hex_u8("drive number", "0x180").is_err());
+    }
 }

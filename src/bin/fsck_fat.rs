@@ -47,8 +47,14 @@ async fn run(args: &Args) -> anyhow::Result<i32> {
         verbose: args.verbose,
     };
 
-    let device = FileDevice::open(&args.device)
-        .await
+    // A check that writes nothing asks for no write access, so a read-only
+    // image, filesystem or block device can be checked.
+    let device = if args.repair {
+        FileDevice::open(&args.device).await
+    } else {
+        FileDevice::open_read_only(&args.device).await
+    };
+    let device = device
         .map_err(|e| anyhow::anyhow!("cannot open {}: {e}", args.device))?;
     let report = check(&device, &options).await?;
 

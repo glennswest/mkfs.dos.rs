@@ -34,7 +34,7 @@
 use std::collections::HashMap;
 
 use crate::device::BlockDevice;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::fat;
 use crate::fs::Filesystem;
 use crate::params::FatType;
@@ -214,6 +214,13 @@ struct MetadataPointers {
     /// The FSInfo sector is inside the reserved area and clear of the boot
     /// sector.
     info_sector: bool,
+    /// The FSInfo sector carries its signatures: it decoded in pass 1, or the
+    /// repair rebuilt it there. Pass 4 reads it only then, so a corrupt
+    /// signature is a finding in the report, never an error that discards it.
+    info_signature: bool,
+    /// Pass 1 rebuilt the FSInfo sector with an unknown free count, which
+    /// pass 4 replaces with the count it makes.
+    info_rebuilt: bool,
 }
 
 /// Check the backup boot sector and FSInfo pointers before anything trusts
@@ -269,6 +276,8 @@ fn check_metadata_pointers(boot: &BootSector, report: &mut FsckReport) -> Metada
         // FSInfo shares a sector with the backup: writing one would destroy
         // the other, so neither is written.
         info_sector: info_ok && !(backup != 0 && backup == info),
+        info_signature: false,
+        info_rebuilt: false,
     }
 }
 
@@ -326,25 +335,35 @@ async fn pass1_boot_sector<D: BlockDevice>(
             }
         }
 
-        if pointers.info_sector && fs.read_fsinfo().await.is_err() {
-            let idx = report.note(
-                1,
-                "fsinfo-signature",
-                Severity::Fixable,
-                format!(
-                    "the FSInfo sector at sector {} has no valid signature",
-                    boot.info_sector
-                ),
-            );
-            if options.repair {
-                // Rewritten with a count of "unknown" now; pass 4 replaces it
-                // with the real one once the clusters have been counted.
-                fs.write_fsinfo(&FsInfo {
-                    free_clusters: crate::structs::fsinfo::UNKNOWN,
-                    next_cluster: 2,
-                })
-                .await?;
-                report.problems[idx].fixed = true;
+        if pointers.info_sector {
+            match fs.read_fsinfo().await {
+                Ok(_) => pointers.info_signature = true,
+                // A bad signature is damage to report; a failed read of the
+                // device is not, and ends the check as any I/O error does.
+                Err(Error::Corrupt { .. }) => {
+                    let idx = report.note(
+                        1,
+                        "fsinfo-signature",
+                        Severity::Fixable,
+                        format!(
+                            "the FSInfo sector at sector {} has no valid signature",
+                            boot.info_sector
+                        ),
+                    );
+                    if options.repair {
+                        // Rewritten with a count of "unknown" now; pass 4
+                        // writes the real one once the clusters are counted.
+                        fs.write_fsinfo(&FsInfo {
+                            free_clusters: crate::structs::fsinfo::UNKNOWN,
+                            next_cluster: 2,
+                        })
+                        .await?;
+                        report.problems[idx].fixed = true;
+                        pointers.info_signature = true;
+                        pointers.info_rebuilt = true;
+                    }
+                }
+                Err(e) => return Err(e),
             }
         }
     }
@@ -769,9 +788,19 @@ async fn pass4_allocation<D: BlockDevice>(
         }
     }
 
-    if fat_type == FatType::Fat32 && pointers.info_sector {
+    if fat_type == FatType::Fat32 && pointers.info_sector && pointers.info_signature {
         if let Some(info) = fs.read_fsinfo().await? {
             let free = report.clusters_free;
+            if pointers.info_rebuilt {
+                // Pass 1 rebuilt the sector (only a repair does) and left the
+                // count unknown for this pass to fill in.
+                fs.write_fsinfo(&FsInfo {
+                    free_clusters: free,
+                    next_cluster: info.next_cluster,
+                })
+                .await?;
+                return Ok(());
+            }
             if info.free_clusters != free && info.free_clusters != crate::structs::fsinfo::UNKNOWN {
                 let idx = report.note(
                     4,
@@ -1264,6 +1293,64 @@ mod tests {
         };
         assert!(fs.write_fsinfo(&info).await.is_err());
         assert!(before == fs.device().to_vec());
+    }
+
+    // Finding 7b5fc59b4073: every sector size the formatter writes (512 to
+    // 32768, as mkfs.fat -S) opens again and checks clean.
+    #[tokio::test]
+    async fn every_sector_size_formatted_opens_again() {
+        for ss in [512u32, 1024, 2048, 4096, 8192, 16384, 32768] {
+            let dev = MemDevice::new(64 * MIB);
+            format(&dev, &Params::new().sector_size(ss)).await.unwrap();
+            let fs = Filesystem::open(dev).await.unwrap_or_else(|e| panic!("{ss}: {e}"));
+            assert_eq!(fs.boot().bytes_per_sector as u32, ss);
+            let report = check_filesystem(&fs, &FsckOptions::check_only())
+                .await
+                .unwrap();
+            assert!(report.is_clean(), "{ss}: {:?}", report.problems);
+        }
+    }
+
+    /// Zero `fs`'s FSInfo sector, so it carries no signature.
+    async fn blank_fsinfo(fs: &Filesystem<MemDevice>) {
+        let off = fs.boot().sector_offset(fs.boot().info_sector as u64);
+        fs.device().write_at(off, &[0u8; 512]).await.unwrap();
+    }
+
+    // Finding 779a821916a5: a corrupt FSInfo signature is one finding among
+    // the others, not an error that throws the report away.
+    #[tokio::test]
+    async fn a_corrupt_fsinfo_signature_keeps_the_report() {
+        let fs = fresh(1024 * MIB).await;
+        blank_fsinfo(&fs).await;
+        // A lost chain, for pass 4 to find after pass 1 met the bad sector.
+        fs.set_fat_entry(10, fs.fat_type().eof_marker()).await.unwrap();
+
+        let report = check_filesystem(&fs, &FsckOptions::check_only())
+            .await
+            .unwrap();
+        assert!(report.problems.iter().any(|p| p.code == "fsinfo-signature" && !p.fixed));
+        assert!(report.problems.iter().any(|p| p.code == "lost-clusters"));
+        assert_eq!(report.exit_code(), 4);
+    }
+
+    // Finding a7421a18bea9: the FSInfo sector rebuilt in pass 1 gets the free
+    // count pass 4 makes, not "unknown".
+    #[tokio::test]
+    async fn a_rebuilt_fsinfo_gets_the_counted_free_clusters() {
+        let fs = fresh(1024 * MIB).await;
+        blank_fsinfo(&fs).await;
+
+        let report = check_filesystem(&fs, &FsckOptions::repair()).await.unwrap();
+        assert!(report.problems.iter().any(|p| p.code == "fsinfo-signature" && p.fixed));
+        let info = fs.read_fsinfo().await.unwrap().unwrap();
+        assert_eq!(info.free_clusters, report.clusters_free);
+        assert_ne!(info.free_clusters, crate::structs::fsinfo::UNKNOWN);
+
+        let report = check_filesystem(&fs, &FsckOptions::check_only())
+            .await
+            .unwrap();
+        assert!(report.is_clean(), "{:?}", report.problems);
     }
 
     #[tokio::test]

@@ -90,9 +90,22 @@ pub struct FileDevice {
 impl FileDevice {
     /// Open an existing file or block device for formatting.
     pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let path = path.as_ref().to_path_buf();
+        Self::open_with(path.as_ref(), true).await
+    }
+
+    /// Open an existing file or block device for reading only.
+    ///
+    /// For a check that writes nothing: it needs no write permission, so it
+    /// works on a read-only file, filesystem or block device. A write through
+    /// it fails with the operating system's error.
+    pub async fn open_read_only(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with(path.as_ref(), false).await
+    }
+
+    async fn open_with(path: &Path, write: bool) -> Result<Self> {
+        let path = path.to_path_buf();
         let file = tokio::task::spawn_blocking(move || {
-            std::fs::OpenOptions::new().read(true).write(true).open(path)
+            std::fs::OpenOptions::new().read(true).write(write).open(path)
         })
         .await
         .map_err(|e| Error::io(0, io::Error::other(e)))?
@@ -419,5 +432,26 @@ mod tests {
         assert!(image[..1024].iter().all(|&b| b == 0xff));
         assert!(image[1024..3072].iter().all(|&b| b == 0));
         assert!(image[3072..].iter().all(|&b| b == 0xff));
+    }
+
+    // Finding dca70d906ff2: a check-only open needs no write access.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_read_only_image_opens_read_only_and_checks() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ro.img");
+        let dev = FileDevice::create(&path, 64 << 20).await.unwrap();
+        crate::format(&dev, &crate::Params::new()).await.unwrap();
+        drop(dev);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+
+        let dev = FileDevice::open_read_only(&path).await.unwrap();
+        let report = crate::fsck::check(&dev, &crate::fsck::FsckOptions::check_only())
+            .await
+            .unwrap();
+        assert!(report.is_clean(), "{:?}", report.problems);
+        // The file descriptor itself refuses writes, whoever runs the test.
+        assert!(dev.write_at(0, &[0u8; 512]).await.is_err());
     }
 }
