@@ -92,6 +92,10 @@ each is a `gap` issue: #6 `-C`, #7 `-c`/`-l`, #8 `--mbr`, #9 `--offset`,
       after an incomplete walk, 95237131f4a2 no size repair from a partial
       chain, c6b6e031797c backup/FSInfo pointers validated; one test each,
       sc-build 6c1dae9 passed (72 unit tests, 16 goldens, clippy clean)
+- [x] #18 five minor review findings (2026-11-21): 779a821916a5 corrupt FSInfo
+      keeps the report, a7421a18bea9 rebuilt FSInfo gets the count,
+      7b5fc59b4073 sector sizes 512–32768 open again, dca70d906ff2 read-only
+      check open, 8a2452f8f3a5 `-M`/`-D` past 0xff refused; one test each
 - [ ] #7 Bad block list (`-c`, `-l`), which marks clusters `0x…fff7`
 - [ ] #8 An MBR partition table in the boot sector (`--mbr`), for a whole-disk
       image Windows should recognise

@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### 2026-11-21
+- **fix:** fsck: a corrupt FSInfo signature is reported (`fsinfo-signature`,
+  exit 4) with the rest of the check, instead of failing the whole check in
+  pass 4 with exit 8; a device read error still stops it (#18, finding
+  779a821916a5).
+- **fix:** fsck repair: an FSInfo sector rebuilt for a bad signature gets the
+  free-cluster count pass 4 makes, not "unknown" (#18, finding a7421a18bea9).
+- **fix:** a volume formatted with a sector size of 8192, 16384 or 32768 opens
+  and checks again: `BootSector::decode` takes the 512–32768 range the
+  formatter and `mkfs.fat -S` take; `mkfs-fat` warns above 4096 as
+  `mkfs.fat` does (#18, finding 7b5fc59b4073).
+- **feat:** `FileDevice::open_read_only`; `fsck-fat` without `-a` opens the
+  device read-only, so read-only images and devices can be checked (#18,
+  finding dca70d906ff2).
+- **fix:** `mkfs-fat -M` / `-D` refuse a value past `0xff` instead of writing
+  its low byte (#18, finding 8a2452f8f3a5).
+
 ### 2026-11-20
 - **fix:** fsck: lost clusters are not freed after an incomplete directory walk
   (an unreadable directory, a broken directory chain, a directory entry with no

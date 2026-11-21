@@ -66,17 +66,17 @@ whole device. Flags follow `mkfs.fat` where they mean the same thing:
 | Flag | Meaning | Default |
 |---|---|---|
 | `-F 12\|16\|32` | FAT width | chosen by size: FAT32 from 512 MiB, else FAT12/16 |
-| `-S BYTES` | logical sector size | the device's (512 for a file); never smaller than it |
+| `-S BYTES` | logical sector size, a power of two 512–32768 as `mkfs.fat` takes; above 4096 it warns, as `mkfs.fat` does, that the volume may not be usable | the device's (512 for a file); never smaller than it |
 | `-s N` | sectors per cluster, power of two 1–128 | from the size |
 | `-R N` | reserved sectors | 1 on FAT12/16, 32 on FAT32 |
 | `-f N` | number of FATs | 2 |
 | `-r N` | root directory entries (FAT12/16) | 512, or 112/224 for floppy sizes |
 | `-n LABEL` | volume label, at most 11 characters | `NO NAME` |
 | `-i HEX` | volume serial number | from the clock |
-| `-M HEX` | media descriptor | `0xf8`, or the floppy's historical byte |
+| `-M HEX` | media descriptor; more than `0xff` is refused | `0xf8`, or the floppy's historical byte |
 | `-H N` | hidden sectors — **`-H`, not `mkfs.fat`'s `-h`**, which is help here | 0 |
 | `-g H/S` | heads / sectors per track | from the size |
-| `-D HEX` | BIOS drive number | `0x80` fixed media, `0x00` otherwise |
+| `-D HEX` | BIOS drive number; more than `0xff` is refused | `0x80` fixed media, `0x00` otherwise |
 | `-b N` | backup boot sector (FAT32) | 6, if the reserved area has room |
 | `-m FILE` | boot-sector message, printed if the volume is booted; `-` reads standard input. Encoded as `mkfs.fat` does (CR and NUL dropped, LF → CR LF, tabs to 8 columns) and cut at 447 bytes, 419 on FAT32, with `Warning: message too long; truncated`. A file that cannot be read stops the format (`mkfs.fat` warns and keeps the default) | `This is not a bootable disk…` |
 | `-a` | do not align structures to cluster boundaries | aligned |
@@ -87,7 +87,8 @@ whole device. Flags follow `mkfs.fat` where they mean the same thing:
 
 Any other flag is rejected as unknown.
 
-`fsck-fat DEVICE` takes `-n` (check only — the default), `-a` (repair what can
+`fsck-fat DEVICE` takes `-n` (check only — the default; it opens the device
+read-only, so a read-only image or device can be checked), `-a` (repair what can
 be repaired) and `-v` (report unusual-but-legal findings too). Exit codes are
 `fsck.fat`'s: 0 clean, 1 errors corrected, 4 errors left uncorrected, 8 the
 check could not run. Repair differs from `fsck.fat -a` in two places: a lost
