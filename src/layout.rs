@@ -99,6 +99,154 @@ impl Geometry {
         self.cluster_count + 2
     }
 
+    /// Check that this geometry describes a filesystem the boot sector can
+    /// express and a device of `device_size` bytes and `device_sector_size`
+    /// byte sectors can hold.
+    ///
+    /// [`crate::format::format_with`] calls it before its first write, so a
+    /// geometry computed for one device and reused as a template on another
+    /// is refused rather than written (finding d2c8cc3b5b0e: a 1 GiB geometry
+    /// on a 64 MiB device used to format "successfully", its metadata all
+    /// within the first few MiB, into a volume that claims 1 GiB). It checks:
+    ///
+    /// - the sector size (a power of two, 512–32768, no smaller than the
+    ///   device's) and the cluster size (a power of two);
+    /// - every field narrowed into the BPB — reserved sectors and root
+    ///   entries in 16 bits, the FAT12/16 FAT length in 16 bits — so that
+    ///   alignment cannot round a `-R 65535` or `-r 65535` up to 65536 and
+    ///   write it as 0 (finding e79fc78001cf);
+    /// - the layout itself: the root directory's sectors match its entries,
+    ///   the FAT holds an entry for every cluster plus the two reserved ones,
+    ///   and the data area ends inside the filesystem, which ends inside the
+    ///   device;
+    /// - FAT32: the FSInfo sector is a reserved sector other than sector 0,
+    ///   where it would overwrite the boot sector (finding e791934d20f9), the
+    ///   backup boot sector is another, and the root cluster exists;
+    /// - Atari FAT12/16: the hidden-sector count fits the 16-bit field.
+    ///
+    /// All arithmetic is in 64 bits, so an arbitrary geometry cannot overflow
+    /// it.
+    pub fn validate(&self, device_size: u64, device_sector_size: u32) -> Result<()> {
+        let bad = |msg: String| Err(Error::invalid(format!("geometry: {msg}")));
+        let ss = self.sector_size as u64;
+        let fat32 = self.fat_type == FatType::Fat32;
+
+        if !self.sector_size.is_power_of_two() || !(512..=32768).contains(&self.sector_size) {
+            return bad(format!(
+                "{} bytes per sector is not a power of two between 512 and 32768",
+                self.sector_size
+            ));
+        }
+        if self.sector_size < device_sector_size {
+            return bad(format!(
+                "{}-byte sectors on a device whose sectors are {device_sector_size} bytes",
+                self.sector_size
+            ));
+        }
+        if self.sectors_per_cluster == 0 || !self.sectors_per_cluster.is_power_of_two() {
+            return bad(format!(
+                "{} sectors per cluster is not a power of two",
+                self.sectors_per_cluster
+            ));
+        }
+        if self.num_fats == 0 {
+            return bad("zero FATs".into());
+        }
+        if self.reserved_sectors == 0 || self.reserved_sectors > u16::MAX as u32 {
+            return bad(format!(
+                "{} reserved sectors does not fit BPB_RsvdSecCnt (1 to 65535)",
+                self.reserved_sectors
+            ));
+        }
+        if fat32 && self.reserved_sectors < 2 {
+            return bad("FAT32 needs at least 2 reserved sectors".into());
+        }
+        if self.root_entries > u16::MAX as u32 {
+            return bad(format!(
+                "{} root directory entries does not fit BPB_RootEntCnt (at most 65535)",
+                self.root_entries
+            ));
+        }
+        if fat32 && (self.root_entries != 0 || self.root_dir_sectors != 0) {
+            return bad("FAT32 has no fixed root directory".into());
+        }
+        if self.root_dir_sectors as u64 != cdiv(self.root_entries as u64 * 32, ss) {
+            return bad(format!(
+                "{} root directory sectors for {} entries of 32 bytes",
+                self.root_dir_sectors, self.root_entries
+            ));
+        }
+        if self.fat_length == 0 || (!fat32 && self.fat_length > u16::MAX as u32) {
+            return bad(format!(
+                "a FAT of {} sectors does not fit BPB_FATSz16 (1 to 65535)",
+                self.fat_length
+            ));
+        }
+        if self.total_sectors == 0 {
+            return bad("zero sectors".into());
+        }
+        let bytes = self.total_sectors as u64 * ss;
+        if bytes > device_size {
+            return bad(format!(
+                "{} sectors of {} bytes is {bytes} bytes; the device holds {device_size}",
+                self.total_sectors, self.sector_size
+            ));
+        }
+        if self.cluster_count == 0 || self.cluster_count > self.fat_type.max_clusters() {
+            return bad(format!(
+                "{} clusters is outside 1 to {} for {}",
+                self.cluster_count,
+                self.fat_type.max_clusters(),
+                self.fat_type
+            ));
+        }
+        let entries = self.fat_length as u64 * ss * 8 / self.fat_type.bits() as u64;
+        if entries < self.cluster_count as u64 + 2 {
+            return bad(format!(
+                "a FAT of {} sectors holds {entries} entries; {} clusters need {}",
+                self.fat_length,
+                self.cluster_count,
+                self.cluster_count as u64 + 2
+            ));
+        }
+        let data_start = self.reserved_sectors as u64
+            + self.num_fats as u64 * self.fat_length as u64
+            + self.root_dir_sectors as u64;
+        let data_end = data_start + self.cluster_count as u64 * self.sectors_per_cluster as u64;
+        if data_end > self.total_sectors as u64 {
+            return bad(format!(
+                "the data area ends at sector {data_end}, past the filesystem's {}",
+                self.total_sectors
+            ));
+        }
+        if fat32 {
+            let info = self.info_sector as u32;
+            if info == 0 || info >= self.reserved_sectors {
+                return bad(format!(
+                    "the FSInfo sector ({info}) must be a reserved sector after the boot sector (1 to {})",
+                    self.reserved_sectors - 1
+                ));
+            }
+            let backup = self.backup_boot as u32;
+            if backup != 0 && (backup == info || backup >= self.reserved_sectors) {
+                return bad(format!(
+                    "the backup boot sector ({backup}) must be a reserved sector other than the FSInfo sector ({info})"
+                ));
+            }
+            if self.root_cluster < 2 || self.root_cluster as u64 > self.cluster_count as u64 + 1 {
+                return bad(format!(
+                    "root cluster {} is not one of clusters 2 to {}",
+                    self.root_cluster,
+                    self.cluster_count as u64 + 1
+                ));
+            }
+        }
+        if self.variant == Variant::Atari && !fat32 && self.hidden_sectors > 0xffff {
+            return bad("#hidden doesn't fit in 16bit field of Atari format".into());
+        }
+        Ok(())
+    }
+
     /// Resolve a geometry for a device of `size_bytes`.
     ///
     /// `device_sector_size` is what the device reports; [`Params::sector_size`]
@@ -300,6 +448,13 @@ impl Geometry {
                     )));
                 }
             }
+            if info_sector == 0 {
+                // Sector 0 is the boot sector; FSInfo written there would
+                // overwrite it (finding e791934d20f9).
+                return Err(Error::invalid(
+                    "the FSInfo sector cannot be sector 0, the boot sector",
+                ));
+            }
             if info_sector as u32 >= reserved_sectors {
                 return Err(Error::invalid(format!(
                     "the FSInfo sector ({info_sector}) must be within the {reserved_sectors} reserved sectors"
@@ -349,6 +504,9 @@ impl Geometry {
             });
         }
 
+        // Alignment can round a 16-bit `-R` or `-r` past 65535; nothing gets
+        // past here that the boot sector cannot say (finding e79fc78001cf).
+        geom.validate(size_bytes, device_sector_size)?;
         Ok(geom)
     }
 }

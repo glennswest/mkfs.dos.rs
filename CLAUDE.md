@@ -135,6 +135,11 @@ each is a `gap` issue: #6 `-C`, #7 `-c`/`-l`, #9 `--offset`,
       4.2), so for every label 4.2 accepts the bytes are the same whatever
       the codepage. Waiting on an owner decision on what to build
 - [ ] #21 fs / fsck-fat: open Atari volumes (no `0xAA55`)
+- [ ] #14 three major review findings in `format.rs` (2026-11-21):
+      d2c8cc3b5b0e `format_with` validates the geometry against the device
+      before writing (`Geometry::validate`), e791934d20f9 FSInfo sector 0
+      refused and never written, e79fc78001cf aligned `-R`/`-r` past 65535
+      refused; one test each
 - [ ] #6 `-C`, #9 `--offset`
 - [x] #5 — README stub line listing unbuilt flags removed; the missing flags
       were already absent from the CLI; each filed as a `gap` issue (2026-11-19)

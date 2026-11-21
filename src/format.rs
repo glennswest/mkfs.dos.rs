@@ -96,6 +96,9 @@ pub async fn format_with<D: BlockDevice>(
     geometry: &Geometry,
     params: &Params,
 ) -> Result<Report> {
+    // Before anything is read or written: a geometry made for another device,
+    // or edited by hand, is refused here (finding d2c8cc3b5b0e).
+    geometry.validate(device.size(), device.logical_sector_size())?;
     let label = params.resolved_label()?;
     let atari = geometry.variant == Variant::Atari;
     // The Atari boot sector has room for 24 bits of serial number.
@@ -155,7 +158,9 @@ pub async fn format_with<D: BlockDevice>(
     };
     device.write_at(0, &sector).await?;
 
-    if geometry.fat_type == FatType::Fat32 {
+    // `validate` refuses an FSInfo sector of 0; the guard keeps this write off
+    // the boot sector whatever changes upstream of it (finding e791934d20f9).
+    if geometry.fat_type == FatType::Fat32 && geometry.info_sector != 0 {
         let info = FsInfo {
             // Cluster 2 is spent on the root directory before anything else is
             // written, so the free count starts one short.
@@ -618,6 +623,85 @@ mod tests {
         assert_eq!(&image[510..512], &[0, 0]);
         let backup = g.backup_boot as usize * 16384;
         assert_eq!(&image[..512], &image[backup..backup + 512]);
+    }
+
+    /// A device holding a recognisable pattern, so a test can tell whether
+    /// a refused format wrote anything.
+    async fn patterned(size: u64) -> MemDevice {
+        let dev = MemDevice::new(size);
+        dev.write_at(0, &vec![0xa5u8; size as usize]).await.unwrap();
+        dev
+    }
+
+    // Finding d2c8cc3b5b0e: a geometry computed for 1 GiB, handed to a
+    // 64 MiB device, is refused before a byte is written.
+    #[tokio::test]
+    async fn a_geometry_for_a_larger_device_is_refused_untouched() {
+        let params = Params::new().invariant();
+        let big = Geometry::compute(1024 * MIB, 512, &params).unwrap();
+        let dev = patterned(64 * MIB).await;
+        let err = format_with(&dev, &big, &params).await.unwrap_err();
+        assert!(err.to_string().contains("the device holds"), "{err}");
+        assert!(dev.to_vec().iter().all(|&b| b == 0xa5), "the device was written");
+
+        // A geometry whose sectors are smaller than the device's.
+        let small = Geometry::compute(64 * MIB, 512, &params).unwrap();
+        let dev4k = MemDevice::with_sector_size(64 * MIB, 4096);
+        assert!(format_with(&dev4k, &small, &params).await.is_err());
+
+        // Internally inconsistent: more clusters than the FAT or the volume.
+        let mut g = small.clone();
+        g.cluster_count += 1000;
+        assert!(format_with(&patterned(64 * MIB).await, &g, &params).await.is_err());
+
+        // The same geometry on a device of its own size is written.
+        let dev = MemDevice::new(64 * MIB);
+        format_with(&dev, &small, &params).await.unwrap();
+        assert!(BootSector::decode(&dev.to_vec()).is_ok());
+    }
+
+    // Finding e791934d20f9: an FSInfo sector of 0 would land on the boot
+    // sector. Params refuses it; so does a hand-made geometry.
+    #[tokio::test]
+    async fn an_fsinfo_sector_of_zero_is_refused() {
+        let mut params = Params::with_type(FatType::Fat32).invariant();
+        params.info_sector = Some(0);
+        let err = Geometry::compute(64 * MIB, 512, &params).unwrap_err();
+        assert!(err.to_string().contains("sector 0"), "{err}");
+
+        let params = Params::with_type(FatType::Fat32).invariant();
+        let mut g = Geometry::compute(64 * MIB, 512, &params).unwrap();
+        g.info_sector = 0;
+        let dev = patterned(64 * MIB).await;
+        let err = format_with(&dev, &g, &params).await.unwrap_err();
+        assert!(err.to_string().contains("FSInfo"), "{err}");
+        assert!(dev.to_vec()[..512].iter().all(|&b| b == 0xa5), "sector 0 was written");
+    }
+
+    // Finding e79fc78001cf: alignment rounds -R 65535 and -r 65535 to 65536,
+    // which the 16-bit BPB fields would hold as 0. Refused, not narrowed.
+    #[tokio::test]
+    async fn aligned_counts_past_sixteen_bits_are_refused() {
+        let reserved = Geometry::compute(64 * MIB, 512, &Params::new().reserved_sectors(65535));
+        let err = reserved.unwrap_err();
+        assert!(err.to_string().contains("BPB_RsvdSecCnt"), "{err}");
+
+        let root = Geometry::compute(64 * MIB, 512, &Params::new().root_entries(65535));
+        let err = root.unwrap_err();
+        assert!(err.to_string().contains("BPB_RootEntCnt"), "{err}");
+
+        // Unaligned, 65535 fits and is written as 65535.
+        let g = Geometry::compute(64 * MIB, 512, &Params::new().root_entries(65535).no_align())
+            .unwrap();
+        assert_eq!(g.root_entries, 65535);
+
+        // A geometry edited past 16 bits never reaches the device.
+        let params = Params::new().invariant();
+        let mut g = Geometry::compute(64 * MIB, 512, &params).unwrap();
+        g.reserved_sectors = 65536;
+        let dev = patterned(64 * MIB).await;
+        assert!(format_with(&dev, &g, &params).await.is_err());
+        assert!(dev.to_vec().iter().all(|&b| b == 0xa5));
     }
 
     // A -m message that runs past offset 439 is cut there.

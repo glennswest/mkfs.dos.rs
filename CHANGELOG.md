@@ -3,6 +3,22 @@
 ## [Unreleased]
 
 ### 2026-11-21
+- **fix:** `format_with` validates the geometry it is handed before its
+  first read or write: new `Geometry::validate(device_size,
+  device_sector_size)`. A geometry for a larger device (1 GiB on 64 MiB),
+  for smaller sectors than the device's, or with inconsistent fields
+  (more clusters than the FAT or the volume holds, root sectors that do
+  not match the entries) is refused as `InvalidParams` and the device is
+  left untouched (#14, finding d2c8cc3b5b0e).
+- **fix:** an FSInfo sector of 0 is refused (`Params::info_sector`, a
+  hand-made `Geometry`); the formatter used to write FSInfo over the boot
+  sector, and still never writes it to sector 0 (#14, finding
+  e791934d20f9).
+- **fix:** `Geometry::compute` ends with `validate`, so a count alignment
+  rounds past its 16-bit BPB field is refused rather than written as 0:
+  `-R 65535` and `-r 65535` on a 64 MiB volume with 4-sector clusters
+  became 65536. FAT12/16 FAT length is checked the same way (#14, finding
+  e79fc78001cf).
 - **feat:** `mkfs-fat -A` / `--variant standard|atari` and `Params::atari`
   (`Params::variant`, `Geometry::variant`, `mkfs_dos::Variant`) write the
   Atari ST (GEMDOS) variant as `mkfs.fat 4.2` does: `60 1c 'm'` jump,
