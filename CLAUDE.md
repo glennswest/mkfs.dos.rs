@@ -148,7 +148,14 @@ each is a `gap` issue: #11 `--codepage` (`-I`, `-A`, `--variant`,
       `char` in `validate_volume_label`, fixed upstream in c888797b1d after
       4.2), so for every label 4.2 accepts the bytes are the same whatever
       the codepage. Waiting on an owner decision on what to build
-- [ ] #21 fs / fsck-fat: open Atari volumes (no `0xAA55`)
+- [ ] #21 fs / fsck-fat: open Atari volumes (no `0xAA55`). Waiting on an
+      owner decision (2026-11-22): the FAT12/FAT16 width of an Atari volume
+      is not in its boot sector, and dosfstools 4.2 decides it two ways —
+      mkfs.fat writes FAT12 at 1440/2400/2880/5760 sectors (or `-F 12`),
+      fsck.fat reads FAT12 at 720/1440/2880 sectors or when a 16-bit FAT
+      cannot hold the clusters; the cluster count we use now misreads
+      `atari-1440k-off10` (FAT16, 1417 clusters), fsck.fat's rule misreads
+      `atari-8m-f12`. Options on the issue
 - [x] #14 three major review findings in `format.rs` (2026-11-21):
       d2c8cc3b5b0e `format_with` validates the geometry against the device
       before writing (`Geometry::validate`), e791934d20f9 FSInfo sector 0
