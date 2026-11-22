@@ -3,6 +3,31 @@
 ## [Unreleased]
 
 ### 2026-11-21
+- **feat:** `mkfs-fat --offset SECTOR` and `Params::offset`: the filesystem
+  is written SECTOR sectors into the device and fills it from there, after
+  dosfstools 4.2's `part_sector`. Sectors are of the `-S` size or the
+  device's; the argument is read as `strtoll(…, 0)` with 4.2's two
+  messages. New `Geometry::offset` (bytes), `Geometry::compute_sized`
+  (a filesystem of BLOCKS inside a device: `establish_params()`'s defaults
+  from the device, `setup_tables()` from the filesystem), and
+  `OffsetDevice`, a window onto a device; `format_with` writes through it
+  and reads the `--mbr` disk signature from the device's own sector 0, as
+  4.2 does. `Geometry::validate` counts the offset. CLI: hidden sectors
+  become the block device's start + SECTOR (a partition's sysfs `start`, 0
+  for a whole disk but a loop device) unless `-H`, and stay as they are on
+  an image file, as in 4.2; `-C` makes the file offset + BLOCKS × 1024
+  bytes. Different from 4.2: `-c` checks from the offset (4.2 always dies in
+  `do_check()`), and an offset with `-A` where GEMDOS grows the logical
+  sector is refused (4.2 writes a volume ending past the device). Twelve
+  goldens recorded by `mkfs.fat 4.2`, `tests/cli_offset.rs` (#9).
+- **fix:** with a BLOCKS count smaller than the device, the defaults
+  `mkfs.fat` takes from the device — the floppy sizes, CHS, FAT32 from 512
+  MiB and its cluster size — come from the device, not from BLOCKS, as
+  4.2's `establish_params(&devinfo)` takes them: 1440 blocks of a 2 MiB
+  file are no longer formatted as a floppy (golden `fat12-2m-blocks1440`).
+  `mkfs-fat` prints 4.2's `Warning: block count mismatch` (#9).
+- **fix:** `mkfs-fat` on a partition writes its start as the hidden sectors
+  (sysfs `start`), as 4.2 does, unless `-H` is given; it wrote 0 (#9).
 - **feat:** `mkfs-fat -l FILE` and `-c`, `Params::bad_blocks` and the new
   `badblocks` module (`parse_list`, `bad_clusters`, `check_blocks`) mark the
   clusters holding bad 1024-byte blocks as `0xff7` / `0xfff7` /

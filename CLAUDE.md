@@ -60,10 +60,11 @@ to find out why it is there.
 Ships as a library by git tag only — not on crates.io, not a stormcentral
 component (no container, port or config). The CLI flags and their divergences
 from `mkfs.fat` (`-H` for hidden sectors, `--fixed`, `--dry-run`) are tabled in README,
-with `--mbr`, whose `auto` reads Linux sysfs as `mkfs.fat` does.
+with `--mbr`, whose `auto` reads Linux sysfs as `mkfs.fat` does, and
+`--offset`, whose hidden sectors read a block device's sysfs `start`.
 The `mkfs.fat` flags not built are absent from the CLI (unknown flag) and
-each is a `gap` issue: #9 `--offset`,
-#11 `--codepage` (`-I`, `-A`, `--variant` are built).
+each is a `gap` issue: #11 `--codepage` (`-I`, `-A`, `--variant`,
+`--offset` are built).
 
 ## Work plan
 
@@ -75,8 +76,9 @@ each is a `gap` issue: #9 `--offset`,
       the 4085 / 65525 cluster thresholds, alignment
 - [x] `format` — the formatter
 - [x] Golden references captured from real `mkfs.fat --invariant`; byte-exact
-      across thirty-eight configurations, FAT12 through FAT32 (four with `-m`,
-      eight with `--mbr`, nine Atari, five with `-l`)
+      across fifty configurations, FAT12 through FAT32 (four with `-m`,
+      eight with `--mbr`, nine Atari, five with `-l`, eleven with
+      `--offset`, one BLOCKS)
 - [x] `fs` — the read layer (boot sector, FAT chains, directories)
 - [x] `fsck` — chain validation, cross-links, lost clusters, FSInfo
 - [x] CLI binaries `mkfs-fat`, `fsck-fat`
@@ -161,7 +163,14 @@ each is a `gap` issue: #9 `--offset`,
       `tests/cli_create.rs` runs `mkfs-fat -C` against it; sc-build ae7dd71
       passed (96 lib + 7 mkfs-fat unit + 2 cli_create tests, 33 goldens,
       clippy clean, `--no-default-features` builds). CLI only: no rev bump
-- [ ] #9 `--offset`
+- [ ] #9 `--offset` (2026-11-21): `Params::offset`, `Geometry::offset` /
+      `compute_sized`, `OffsetDevice`, after dosfstools 4.2 `part_sector`;
+      device-wide defaults vs filesystem layout as `establish_params()` /
+      `setup_tables()` split them (also fixes BLOCKS < device); hidden =
+      block device start + offset (sysfs `start`; never on a file); `-c`
+      from the offset (4.2 dies); Atari with a grown sector refused (4.2
+      writes past the device). Twelve goldens + `offset-probes.log` from
+      mkfs.fat 4.2 on a build VM (02e67ea/b6e23e3); sc-build pending
 - [x] #5 — README stub line listing unbuilt flags removed; the missing flags
       were already absent from the CLI; each filed as a `gap` issue (2026-11-19)
 - [x] #1 — kernel verification runnable without a local build or root

@@ -6,7 +6,7 @@ A from-scratch reimplementation of `mkfs.fat` and `fsck.fat`, written from the
 Microsoft FAT specification (`fatgen103`) and then held to real
 [dosfstools](https://github.com/dosfstools/dosfstools) output: the golden tests
 compare our image against one `mkfs.fat --invariant` produced for the same
-geometry, **byte for byte**, across twenty-four configurations.
+geometry, **byte for byte**, across fifty configurations.
 
 ## Using it
 
@@ -29,7 +29,10 @@ The library is `format` (or `Geometry::compute` then `format_with`, to see the
 geometry before anything is written; `format_with` runs `Geometry::validate`
 against the device first, and refuses a geometry that is too big for it, made
 for smaller sectors, or not expressible in the boot sector, writing nothing;
-`Params::bad_blocks` and the `badblocks` module are `-l`/`-c`),
+`Params::bad_blocks` and the `badblocks` module are `-l`/`-c`;
+`Params::offset` is `--offset`, and `Geometry::compute_sized` takes a BLOCKS
+size inside the device; `OffsetDevice` is a window onto a device from a byte
+offset, for reading or checking a volume that does not start at byte 0),
 `check` with `FsckOptions`, and
 `Filesystem` for reading a volume back. `FileDevice` formats a file or a block
 device; `MemDevice` formats a buffer. Library consumers who do not want the CLI
@@ -97,6 +100,7 @@ whole device. Flags follow `mkfs.fat` where they mean the same thing:
 | `-I` | format a whole disk that has partitions on it, or a device something is mapped onto (Linux sysfs: a partition child not starting at 0, or a `holders` entry); without it that is refused, as `mkfs.fat` refuses it | refuse |
 | `-l FILE` | mark bad the clusters holding the 1024-byte blocks FILE lists — one decimal block number per line, counted from the start of the filesystem, read as `mkfs.fat 4.2`'s `get_list_blocks()` reads it — as `0xff7` / `0xfff7` / `0x0ffffff7` in every FAT, and print `N bad blocks`. Refused, with nothing written: a malformed line or a negative number; a block before the data area (`Block number N is before data area`); a block at or past `num_sectors` (`… is behind end of filesystem` — 4.2 compares 512-byte sectors with *logical* ones here, so with 4096-byte sectors only the first eighth of the volume can be listed, and this keeps that limit); a block past the last cluster (4.2 dies with an internal error); and, here only, a block in the FAT32 root directory's cluster, which 4.2 marks bad under the root. Nothing else changes: FAT32's FSInfo free count stays `cluster_count - 1`, as 4.2 writes it, so `fsck.fat` reports it wrong. An empty FILE marks nothing (4.2 refuses it, from a stale `errno` at end of file) | none |
 | `-c` | read every 1024-byte block of the target first and mark the unreadable ones as `-l` does; one before the data area stops the format (`bad blocks before data-area: cannot make fs`). An image file always reads, so it changes nothing there. Not with `-l` (`-c and -l are incompatible`) | off |
+| `--offset SECTOR` | write the filesystem SECTOR sectors into the device and fill it from there, as `mkfs.fat 4.2` does: sectors of the `-S` size or the device's (512 on an image file), read as `strtoll(…, 0)` takes them (decimal, `0x` hex, `0` octal; `Bad number for offset : …`, `FAT offset must be between 0 and …` for a negative one). The defaults taken from the device — floppy sizes, CHS, FAT32 from 512 MiB and its cluster size — still look at the whole device; a BLOCKS count is the filesystem inside the rest (`Warning: block count mismatch` if it is not all of it). Hidden sectors are left alone on an image file (0, as in 4.2); on a block device they become its start + SECTOR unless `-H` is given: a partition's sysfs `start`, 0 for a whole disk — except a loop device, which has none (4.2 asks `HDIO_GETGEO`, an ioctl this crate does not make). A fake MBR goes in the volume's own boot sector, at the offset. `-C` makes the file offset + BLOCKS × 1024 bytes. Differences: `-c` checks the blocks from the offset (4.2 always dies, `seek failed during testing for blocks`); an offset at or past the end is refused with `less than the offset` on a file too (4.2: `Too few blocks for viable filesystem`); and an offset with `-A` where GEMDOS enlarges the logical sector is refused (4.2 measures from offset × 512 and writes at offset × the enlarged size, a volume that ends past the device; give `-S`) | 0 |
 | `--fixed` | treat the target as a fixed disk, so floppy defaults never apply (not in `mkfs.fat`, which asks the kernel) | removable, as `mkfs.fat` treats a file |
 | `--invariant` | fixed serial and timestamps, for reproducible images | off |
 | `--dry-run` | print the geometry and write nothing (not in `mkfs.fat`) | off |
@@ -225,7 +229,7 @@ no root, no dosfstools needed.
 
 ## Golden comparison
 
-`cargo test --release --test golden_compare` (also part of plain `cargo test`) decompresses thirty-eight images made by
+`cargo test --release --test golden_compare` (also part of plain `cargo test`) decompresses fifty images made by
 `mkfs.fat 4.2` and requires ours to be identical, byte for byte:
 
 | | |
@@ -239,6 +243,7 @@ no root, no dosfstools needed.
 | 1440 KiB, 16 MiB, 512 MiB | `-m FILE`: a message with tabs, CRs, blank lines and a NUL (FAT12, FAT32), and one too long for the boot code (FAT16, FAT32) |
 | 1440 KiB to 1 GiB | `--mbr=y`: each partition type `mkfs.fat` picks — `0x01` FAT12, `0x04` FAT16 under 65536 sectors, `0x06` within CHS reach, `0x0e` past it (`-F 16` at 1 GiB) and with `-g 255/63`, `0x0c` FAT32 — and a long `-m` message cut at 439 by the table (FAT16, FAT32) |
 | 720 KiB to 512 MiB | `-A` / `--variant atari`: the 720 KiB and 1.44 MB floppies (FAT12), FAT16 at 16 and 64 MiB (2 KiB logical sectors at 64), with a label, `-F 12` at 8 MiB (a FAT too big, so 2 KiB sectors), `-S 2048` held, FAT32 at 512 MiB on 16 KiB sectors, and `--mbr=y` |
+| 1440 KiB to 1 GiB | `--offset SECTOR`: FAT12 at 63 sectors into a 1440 KiB file (still a floppy's parameters), FAT16 at 2048 (also with `--mbr=y`, with `-h 2048`, as `0x800` with 16384 BLOCKS, and in a 17 MiB file, which `make-golden.sh` checks real `mkfs.fat -C --offset` reproduces), FAT32 at 2048, at 256 4 KiB sectors, and at 32768 in 520 MiB (FAT32, though 504 MiB is left), Atari at 10 into a 1440 KiB floppy and at 16 with `-S 2048`; and BLOCKS alone, 1440 of a 2 MiB file, no floppy parameters. `tests/cli_offset.rs` runs `mkfs-fat` against them; `make-golden.sh` logs 4.2's refusals, `-c --offset` and `fsck.fat -n` over each volume cut out of its golden (`offset-probes.log`, in the tar) |
 | 1440 KiB to 1 GiB | `-l FILE`: bad blocks on FAT12 (a list in every form `strtoll` takes, and an entry straddling two FAT sectors), FAT16, FAT32 (FSInfo untouched), FAT32 on 4 KiB sectors and Atari FAT16 on 2 KiB logical sectors. `make-golden.sh` also checks that `mkfs.fat -c` on an image file writes the plain golden, and logs what 4.2 does with the lists it refuses (`bad-probes.log`, in the tar) |
 
 Regenerate them with `tests/make-golden.sh` on a host with dosfstools, as an
