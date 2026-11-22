@@ -499,6 +499,26 @@ mod tests {
         assert!(image[3072..].iter().all(|&b| b == 0xff));
     }
 
+    // --offset (#9): byte 0 of the window is byte `offset` of the device,
+    // nothing is addressed past the end, and an offset with nothing after it
+    // is refused.
+    #[tokio::test]
+    async fn an_offset_device_is_a_window_from_the_offset() {
+        let dev = MemDevice::new(4096);
+        let win = OffsetDevice::new(&dev, 1024).unwrap();
+        assert_eq!((win.size(), win.offset(), win.logical_sector_size()), (3072, 1024, 512));
+        win.write_at(0, b"boot").await.unwrap();
+        win.write_zeroes(8, 8).await.unwrap();
+        assert_eq!(&dev.to_vec()[1024..1028], b"boot");
+        let mut buf = [0u8; 4];
+        win.read_at(0, &mut buf).await.unwrap();
+        assert_eq!(&buf, b"boot");
+        assert!(matches!(win.write_at(3070, &[0u8; 4]).await, Err(Error::OutOfBounds { .. })));
+        assert!(matches!(win.write_zeroes(3000, 100).await, Err(Error::OutOfBounds { .. })));
+        assert!(OffsetDevice::new(&dev, 4096).is_err());
+        assert!(OffsetDevice::new(&dev, 0).unwrap().size() == 4096);
+    }
+
     // Finding dca70d906ff2: a check-only open needs no write access.
     #[cfg(unix)]
     #[tokio::test]

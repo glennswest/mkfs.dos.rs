@@ -1,0 +1,12 @@
+Warning: block count mismatch: found 2048 but assuming 1440.
+mkfs.fat 4.2 (2021-01-31)
+fat12-2m-blocks1440.img has 2 heads and 16 sectors per track,
+hidden sectors 0x0000;
+logical sector size is 512,
+using 0xf8 media descriptor, with 2880 sectors;
+drive number 0x80;
+filesystem has 2 12-bit FATs and 4 sectors per cluster.
+FAT size is 3 sectors, and provides 710 clusters.
+There is 1 reserved sector.
+Root directory contains 512 slots and uses 32 sectors.
+Volume ID is 1234abcd, no volume label.

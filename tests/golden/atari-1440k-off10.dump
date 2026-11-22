@@ -1,0 +1,11 @@
+mkfs.fat 4.2 (2021-01-31)
+atari-1440k-off10.img has 2 heads and 18 sectors per track,
+hidden sectors 0x0000;
+logical sector size is 512,
+using 0xf0 media descriptor, with 2862 sectors;
+drive number 0x00;
+filesystem has 2 16-bit FATs and 2 sectors per cluster.
+FAT size is 6 sectors, and provides 1417 clusters.
+There is 1 reserved sector.
+Root directory contains 224 slots and uses 14 sectors.
+Volume ID is 0034abcd, no volume label.

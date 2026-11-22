@@ -1166,6 +1166,75 @@ mod tests {
         assert!(Geometry::compute(16 * MIB, 512, &Params::new().atari().hidden_sectors(0xffff)).is_ok());
     }
 
+    // --offset (#9): the filesystem is the device less the offset, in
+    // sectors of the size asked for; the defaults establish_params() takes
+    // from the device still see all of it.
+    #[test]
+    fn an_offset_fills_the_device_from_there() {
+        let plain = geom(64 * MIB, &Params::new());
+        let g = geom(64 * MIB, &Params::new().offset(2048));
+        assert_eq!(g.offset, 2048 * 512);
+        assert_eq!(g.total_sectors as u64, (64 * MIB - MIB) / 512 / 32 * 32);
+        assert_eq!((g.heads, g.sectors_per_track), (plain.heads, plain.sectors_per_track));
+        assert_eq!(g.hidden_sectors, 0, "an image file's hidden sectors stay 0");
+
+        // 4 KiB sectors count the offset in 4 KiB.
+        let g = Geometry::compute(1024 * MIB, 512, &Params::new().sector_size(4096).offset(256)).unwrap();
+        assert_eq!(g.offset, MIB);
+
+        // A 1440 KiB device keeps the floppy parameters with less than 1440 KiB left.
+        let g = geom(1440 * 1024, &Params::new().offset(63));
+        assert_eq!((g.media, g.sectors_per_track, g.root_entries), (0xf0, 18, 224));
+        assert_eq!(g.total_sectors, (2880 - 63) / 18 * 18);
+
+        // FAT32 because the device is 520 MiB, though 504 MiB is left.
+        let g = geom(520 * MIB, &Params::new().offset(32768));
+        assert_eq!(g.fat_type, FatType::Fat32);
+
+        // A BLOCKS count inside the rest of the device; the device decides
+        // the floppy match, not BLOCKS.
+        let g = Geometry::compute_sized(64 * MIB, Some(16 * MIB), 512, &Params::new().offset(2048)).unwrap();
+        assert_eq!(g.total_sectors, 32768);
+        assert_eq!((g.offset, g.heads), (MIB, plain.heads));
+        let g = Geometry::compute_sized(2 * MIB, Some(1440 * 1024), 512, &Params::new()).unwrap();
+        assert_ne!(g.media, 0xf0, "1440 blocks of a 2 MiB file are not a floppy");
+        assert!(Geometry::compute_sized(64 * MIB, Some(64 * MIB), 512, &Params::new().offset(1)).is_err());
+
+        // Refused: an offset at or past the end.
+        let err = geom_err(1440 * 1024, &Params::new().offset(2880));
+        assert!(err.contains("less than the offset"), "{err}");
+        assert!(Geometry::compute(u64::MAX, 512, &Params::new().offset(u64::MAX)).is_err());
+    }
+
+    // --offset with the Atari variant: allowed where the logical sector size
+    // stays what it was asked to be, refused where the search grows it (4.2
+    // would write past where it measured).
+    #[test]
+    fn an_atari_offset_is_refused_where_the_sector_grows() {
+        let g = geom(1440 * 1024, &Params::new().atari().offset(10));
+        assert_eq!((g.sector_size, g.offset), (512, 5120));
+        let g = geom(32 * MIB, &Params::new().atari().sector_size(2048).offset(16));
+        assert_eq!((g.sector_size, g.offset), (2048, 32768));
+        let err = geom_err(64 * MIB, &Params::new().atari().offset(8));
+        assert!(err.contains("-S 2048"), "{err}");
+        assert!(geom(64 * MIB, &Params::new().atari()).sector_size > 512);
+    }
+
+    // The geometry is checked against the device from its offset on.
+    #[test]
+    fn validate_counts_the_offset() {
+        let g = geom(64 * MIB, &Params::new().offset(2048));
+        assert!(g.validate(64 * MIB, 512).is_ok());
+        assert!(g.validate(64 * MIB - 512, 512).is_err());
+        let mut far = g.clone();
+        far.offset = u64::MAX;
+        assert!(far.validate(u64::MAX, 512).is_err());
+    }
+
+    fn geom_err(size: u64, params: &Params) -> String {
+        Geometry::compute(size, 512, params).unwrap_err().to_string()
+    }
+
     #[test]
     fn a_sector_size_below_the_devices_is_raised_to_it() {
         let g = Geometry::compute(1024 * MIB, 4096, &Params::new().sector_size(512)).unwrap();

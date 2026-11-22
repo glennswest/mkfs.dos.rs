@@ -16,7 +16,8 @@
 use std::io::Read;
 use std::path::Path;
 
-use mkfs_dos::{format, FatType, MemDevice, Params};
+use mkfs_dos::format::format_with;
+use mkfs_dos::{format, FatType, Geometry, MemDevice, Params};
 
 /// A golden image and the parameters that should reproduce it.
 struct Case {
@@ -251,6 +252,92 @@ const CASES: &[Case] = &[
         size: 64 * MIB,
         params: || Params::new().invariant().atari().bad_blocks(list(BAD_ATARI_64M)),
     },
+    // `--offset` (#9): the filesystem from sector N to the end, the bytes
+    // before it untouched (zero in the golden), hidden sectors left at 0 as
+    // 4.2 leaves them on an image file. The floppy match, CHS and FAT32 at
+    // 512 MiB still see the whole device: 1440 KiB less 63 sectors keeps
+    // the floppy parameters, 520 MiB less 16 MiB is FAT32.
+    Case {
+        name: "fat12-1440k-off63",
+        size: 1440 * KIB,
+        params: || Params::new().invariant().offset(63),
+    },
+    Case {
+        name: "fat16-64m-off2048",
+        size: 64 * MIB,
+        params: || Params::new().invariant().offset(2048),
+    },
+    Case {
+        name: "fat16-17m-off2048",
+        size: 17 * MIB,
+        params: || Params::new().invariant().offset(2048),
+    },
+    Case {
+        name: "fat32-1g-off2048",
+        size: 1024 * MIB,
+        params: || Params::new().invariant().offset(2048),
+    },
+    Case {
+        name: "fat32-520m-off32768",
+        size: 520 * MIB,
+        params: || Params::new().invariant().offset(32768),
+    },
+    // 4 KiB sectors count the offset in 4 KiB: 256 of them is 1 MiB.
+    Case {
+        name: "fat32-1g-4k-off256",
+        size: 1024 * MIB,
+        params: || Params::new().invariant().sector_size(4096).offset(256),
+    },
+    // The fake MBR goes at the offset, in the volume's own boot sector.
+    Case {
+        name: "fat16-64m-off2048-mbr",
+        size: 64 * MIB,
+        params: || Params::new().invariant().offset(2048).mbr(),
+    },
+    Case {
+        name: "fat16-64m-off2048-h",
+        size: 64 * MIB,
+        params: || Params::new().invariant().offset(2048).hidden_sectors(2048),
+    },
+    // Atari where the logical sector stays as asked: a floppy, and -S 2048.
+    Case {
+        name: "atari-1440k-off10",
+        size: 1440 * KIB,
+        params: || Params::new().invariant().atari().offset(10),
+    },
+    Case {
+        name: "atari-32m-s2048-off16",
+        size: 32 * MIB,
+        params: || Params::new().invariant().atari().sector_size(2048).offset(16),
+    },
+];
+
+/// A golden made with a BLOCKS count: a filesystem of `blocks` KiB on a device
+/// of `size` bytes, through [`Geometry::compute_sized`] and `format_with` —
+/// as `mkfs-fat DEVICE BLOCKS` does it.
+struct SizedCase {
+    name: &'static str,
+    size: u64,
+    blocks: u64,
+    params: fn() -> Params,
+}
+
+const SIZED_CASES: &[SizedCase] = &[
+    // The device decides the defaults, not BLOCKS: 1440 blocks of a 2 MiB file
+    // get the fixed-disk media byte and geometry, not a floppy's.
+    SizedCase {
+        name: "fat12-2m-blocks1440",
+        size: 2 * MIB,
+        blocks: 1440,
+        params: || Params::new().invariant(),
+    },
+    // `--offset 0x800` with 16 MiB of filesystem in a 64 MiB file.
+    SizedCase {
+        name: "fat16-64m-off0x800-blocks",
+        size: 64 * MIB,
+        blocks: 16384,
+        params: || Params::new().invariant().offset(0x800),
+    },
 ];
 
 /// The bad block lists `tests/make-golden.sh` hands `mkfs.fat -l`.
@@ -309,6 +396,35 @@ async fn our_images_are_identical_to_dosfstools() {
         "images differ from dosfstools:\n{}",
         failures.join("\n")
     );
+}
+
+#[tokio::test]
+async fn our_sized_images_are_identical_to_dosfstools() {
+    let mut failures = Vec::new();
+    for case in SIZED_CASES {
+        let Some(golden) = load_golden(case.name) else {
+            failures.push(format!("{}: golden image missing", case.name));
+            continue;
+        };
+        assert_eq!(golden.len() as u64, case.size, "{}: golden size", case.name);
+        let device = MemDevice::new(case.size);
+        let params = (case.params)();
+        let result = match Geometry::compute_sized(case.size, Some(case.blocks * KIB), 512, &params) {
+            Ok(g) => format_with(&device, &g, &params).await,
+            Err(e) => Err(e),
+        };
+        let report = match result {
+            Ok(r) => r,
+            Err(e) => {
+                failures.push(format!("{}: format failed: {e}", case.name));
+                continue;
+            }
+        };
+        if let Some(diff) = first_difference(&golden, &device.to_vec()) {
+            failures.push(format!("{}: {} [{}]", case.name, diff, report));
+        }
+    }
+    assert!(failures.is_empty(), "images differ from dosfstools:\n{}", failures.join("\n"));
 }
 
 /// Where two images first differ, described well enough to act on.

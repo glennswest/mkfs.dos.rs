@@ -559,6 +559,11 @@ async fn main() -> anyhow::Result<()> {
     // from the offset on. The defaults that come from the device itself are
     // taken from all of it, as `establish_params()` takes them.
     let room = device.size() - offset_bytes;
+    if let Some(b) = args.blocks {
+        if b != room / 1024 {
+            eprintln!("Warning: block count mismatch: found {} but assuming {b}.", room / 1024);
+        }
+    }
     let size = format_size(args.blocks, &args.device, room)?;
     let fs_bytes = args.blocks.map(|_| size);
 
@@ -787,9 +792,64 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), b"keep");
 
         assert!(create_image(dir.path().join("x").to_str().unwrap(), Some(u64::MAX), 0).is_err());
+        // --offset: the file is the offset longer.
+        let off = dir.path().join("off.img");
+        create_image(off.to_str().unwrap(), Some(16384), 2048 * 512).unwrap();
+        assert_eq!(std::fs::metadata(&off).unwrap().len(), 17 << 20);
+        assert!(create_image(dir.path().join("y").to_str().unwrap(), Some(1 << 53), u64::MAX).is_err());
         let a = Args::try_parse_from(["mkfs.fat", "-C", "img", "1440"]).unwrap();
         assert!(a.create);
         assert_eq!(a.blocks, Some(1440));
+    }
+
+    // --offset (#9): strtoll(…, 0) and 4.2's two refusals.
+    #[test]
+    fn offset_is_read_as_mkfs_fat_reads_it() {
+        assert_eq!(parse_offset("2048").unwrap(), 2048);
+        assert_eq!(parse_offset("0x800").unwrap(), 2048);
+        assert_eq!(parse_offset("0X800").unwrap(), 2048);
+        assert_eq!(parse_offset("04000").unwrap(), 2048);
+        assert_eq!(parse_offset("+63").unwrap(), 63);
+        assert_eq!(parse_offset("0").unwrap(), 0);
+        assert_eq!(parse_offset("-0").unwrap(), 0);
+        assert_eq!(parse_offset("9223372036854775807").unwrap(), i64::MAX as u64);
+        for bad in ["", " 8", "8 ", "8x", "08", "0x", "-", "+", "9223372036854775808", "1e3"] {
+            let err = parse_offset(bad).unwrap_err().to_string();
+            assert!(err.starts_with("Bad number for offset"), "{bad:?}: {err}");
+        }
+        for neg in ["-1", "-0x10", "-9223372036854775808"] {
+            let err = parse_offset(neg).unwrap_err().to_string();
+            assert!(err.starts_with("FAT offset must be between 0 and"), "{neg:?}: {err}");
+        }
+        let a = Args::try_parse_from(["mkfs.fat", "--offset", "2048", "img"]).unwrap();
+        assert_eq!(a.offset.as_deref(), Some("2048"));
+    }
+
+    // Hidden sectors: -H wins; else the device's start plus the offset where
+    // 4.2 knows the start (a partition's sysfs `start`, a whole disk's 0, a
+    // loop device's none); never past 32 bits.
+    #[test]
+    fn hidden_sectors_follow_the_device_start() {
+        assert_eq!(hidden_sectors(Some(7), Some(2048), 63), Some(7));
+        assert_eq!(hidden_sectors(None, None, 2048), None);
+        assert_eq!(hidden_sectors(None, Some(0), 2048), Some(2048));
+        assert_eq!(hidden_sectors(None, Some(2048), 0), Some(2048));
+        assert_eq!(hidden_sectors(None, Some(2048), 63), Some(2111));
+        assert_eq!(hidden_sectors(None, Some(u32::MAX as u64), 1), None);
+
+        let root = std::env::temp_dir().join(format!("mkfs-fat-start-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let part = root.join("8:1");
+        std::fs::create_dir_all(&part).unwrap();
+        std::fs::write(part.join("start"), "2048\n").unwrap();
+        assert_eq!(device_start(&part), Some(2048));
+        let disk = root.join("8:0");
+        std::fs::create_dir_all(&disk).unwrap();
+        assert_eq!(device_start(&disk), Some(0));
+        let lo = root.join("7:0");
+        std::fs::create_dir_all(lo.join("loop")).unwrap();
+        assert_eq!(device_start(&lo), None);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     // Auto never writes a table on an image file or a non-block device.
