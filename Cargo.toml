@@ -64,3 +64,7 @@ rustix = { version = "1.1.4", features = ["fs"] }
 [[test]]
 name = "cli_create"
 required-features = ["cli"]
+
+[[test]]
+name = "cli_badblocks"
+required-features = ["cli"]

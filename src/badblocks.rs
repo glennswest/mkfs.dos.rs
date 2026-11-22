@@ -50,6 +50,13 @@ pub const TEST_BUFFER_BLOCKS: u64 = 16;
 /// digits, and the line ends at a NUL. Empty and white-space-only lines are
 /// skipped. A negative number, one past `i64::MAX`, or a badly formed line is
 /// refused. Duplicates are kept: `mkfs.fat` counts each line.
+///
+/// One difference: an empty file is an empty list. 4.2 refuses it
+/// (`getline: No such file or directory`, `Error while reading bad blocks
+/// file`) because it tells end of file from a read error by `errno`, which
+/// nothing has cleared when the first `getline()` hits the end; a file with
+/// a line in it, even a blank one, clears it. Recorded on a build VM, see
+/// `bad-probes.log` from `tests/make-golden.sh`.
 pub fn parse_list(text: &[u8]) -> Result<Vec<u64>> {
     let mut blocks = Vec::new();
     for (index, raw) in text.split_inclusive(|&b| b == b'\n').enumerate() {

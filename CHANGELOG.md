@@ -3,6 +3,23 @@
 ## [Unreleased]
 
 ### 2026-11-21
+- **feat:** `mkfs-fat -l FILE` and `-c`, `Params::bad_blocks` and the new
+  `badblocks` module (`parse_list`, `bad_clusters`, `check_blocks`) mark the
+  clusters holding bad 1024-byte blocks as `0xff7` / `0xfff7` /
+  `0x0ffffff7` in every FAT, after dosfstools 4.2 `get_list_blocks()`,
+  `check_blocks()` and `mark_FAT_sector()`. The list is read as `strtoll`
+  reads it; refused, before anything is written, are a malformed or
+  negative line, a block before the data area, one at or past
+  `num_sectors` (4.2's hard-vs-logical sector comparison kept, so 4096-byte
+  sectors take only the first eighth), one past the last cluster (4.2's
+  internal error), and — this crate only — one in the FAT32 root cluster,
+  which 4.2 writes as a root directory its own `fsck.fat` cannot walk. The
+  FAT32 FSInfo free count stays `cluster_count - 1`, as 4.2 leaves it. An
+  empty list is accepted (4.2 refuses it from a stale `errno`). `-c` and `-l`
+  together are refused. `Report::bad_blocks` / `bad_clusters`; `mkfs-fat`
+  prints `N bad blocks`. Five new goldens recorded by `mkfs.fat 4.2`, and
+  `make-golden.sh` checks `mkfs.fat -c` on an image file gives the plain
+  golden (#7).
 - **feat:** `mkfs-fat -C DEVICE BLOCKS` creates DEVICE as a new file of
   BLOCKS × 1024 bytes and formats it, as `mkfs.fat -C` does: `O_EXCL`, mode
   `0666`, BLOCKS required (`Need intended size with -C.`), an existing file

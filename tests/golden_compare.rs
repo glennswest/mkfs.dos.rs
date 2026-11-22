@@ -217,7 +217,52 @@ const CASES: &[Case] = &[
         size: 16 * MIB,
         params: || Params::new().invariant().atari().mbr(),
     },
+    // `-l FILE` (#7): the clusters holding each listed 1024-byte block marked
+    // bad in every FAT. The FAT12 list has every form strtoll takes and an
+    // entry straddling two FAT sectors; FAT32 keeps FSInfo's free count at
+    // `cluster_count - 1`, as 4.2 does; 4 KiB and Atari 2 KiB sectors.
+    Case {
+        name: "fat12-1440k-bad",
+        size: 1440 * KIB,
+        params: || Params::new().invariant().bad_blocks(list(BAD_1440K)),
+    },
+    Case {
+        name: "fat16-16m-bad",
+        size: 16 * MIB,
+        params: || Params::new().invariant().bad_blocks(list(BAD_16M)),
+    },
+    Case {
+        name: "fat32-512m-bad",
+        size: 512 * MIB,
+        params: || Params::new().invariant().bad_blocks(list(BAD_FAT32_512M)),
+    },
+    Case {
+        name: "fat32-1g-4k-bad",
+        size: 1024 * MIB,
+        params: || {
+            Params::new()
+                .invariant()
+                .sector_size(4096)
+                .bad_blocks(list(BAD_FAT32_1G_4K))
+        },
+    },
+    Case {
+        name: "atari-64m-bad",
+        size: 64 * MIB,
+        params: || Params::new().invariant().atari().bad_blocks(list(BAD_ATARI_64M)),
+    },
 ];
+
+/// The bad block lists `tests/make-golden.sh` hands `mkfs.fat -l`.
+const BAD_1440K: &[u8] = include_bytes!("golden/bad-1440k.txt");
+const BAD_16M: &[u8] = include_bytes!("golden/bad-16m.txt");
+const BAD_FAT32_512M: &[u8] = include_bytes!("golden/bad-fat32-512m.txt");
+const BAD_FAT32_1G_4K: &[u8] = include_bytes!("golden/bad-fat32-1g-4k.txt");
+const BAD_ATARI_64M: &[u8] = include_bytes!("golden/bad-atari-64m.txt");
+
+fn list(text: &[u8]) -> Vec<u64> {
+    mkfs_dos::badblocks::parse_list(text).unwrap()
+}
 
 /// The message files `tests/make-golden.sh` hands `mkfs.fat -m`.
 const MSG_SHORT: &[u8] = include_bytes!("golden/msg-short.txt");

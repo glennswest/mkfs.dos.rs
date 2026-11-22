@@ -448,7 +448,7 @@ fn fat_sectors(geometry: &Geometry, bad_clusters: &[u32]) -> BTreeMap<u64, Vec<u
     }
     let fat_type = geometry.fat_type;
     let bad = fat_type.bad_marker();
-    let mut byte = |sectors: &mut BTreeMap<u64, Vec<u8>>, offset: u64| -> (u64, usize) {
+    let byte = |sectors: &mut BTreeMap<u64, Vec<u8>>, offset: u64| -> (u64, usize) {
         let index = offset / ss;
         sectors.entry(index).or_insert_with(|| vec![0u8; ss as usize]);
         (index, (offset % ss) as usize)

@@ -28,7 +28,8 @@ println!("{report}");
 The library is `format` (or `Geometry::compute` then `format_with`, to see the
 geometry before anything is written; `format_with` runs `Geometry::validate`
 against the device first, and refuses a geometry that is too big for it, made
-for smaller sectors, or not expressible in the boot sector, writing nothing),
+for smaller sectors, or not expressible in the boot sector, writing nothing;
+`Params::bad_blocks` and the `badblocks` module are `-l`/`-c`),
 `check` with `FsckOptions`, and
 `Filesystem` for reading a volume back. `FileDevice` formats a file or a block
 device; `MemDevice` formats a buffer. Library consumers who do not want the CLI
@@ -94,6 +95,8 @@ whole device. Flags follow `mkfs.fat` where they mean the same thing:
 | `-C` | create DEVICE as a new file of BLOCKS × 1024 bytes, then format it, as `mkfs.fat -C` does (`O_EXCL`, mode `0666` less the umask). BLOCKS is required (`Need intended size with -C.`); an existing file is refused (`file … already exists`) and left untouched. A file created this way stays if the format then fails, as with `mkfs.fat` | off: DEVICE must exist |
 | `-A` / `--variant standard\|atari` | the Atari ST (GEMDOS) variant, as `mkfs.fat 4.2` writes it: `60 1c 'm'` where the x86 jump goes, `kdosf` plus the low 24 bits of the serial as the OEM name, no extended boot record (only the drive number), no boot code, no `0xAA55`, and the label in the root directory only. Geometry by GEMDOS's rules: FAT12 only at 1440/2400/2880/5760 sectors, else FAT16 (FAT32 from 512 MiB), two-sector clusters, no cluster alignment, and *logical* sectors doubled until there are at most 65531 and the FAT fits — up to 16 KiB, so 512 MiB is the largest; a sector size given with `-S` (or a block device's own) is kept and the format refused if it does not fit. `-A` toggles, `--variant` sets; the last on the line wins. `fsck-fat` cannot open the result yet: it wants `0xAA55` (#21) | standard |
 | `-I` | format a whole disk that has partitions on it, or a device something is mapped onto (Linux sysfs: a partition child not starting at 0, or a `holders` entry); without it that is refused, as `mkfs.fat` refuses it | refuse |
+| `-l FILE` | mark bad the clusters holding the 1024-byte blocks FILE lists — one decimal block number per line, counted from the start of the filesystem, read as `mkfs.fat 4.2`'s `get_list_blocks()` reads it — as `0xff7` / `0xfff7` / `0x0ffffff7` in every FAT, and print `N bad blocks`. Refused, with nothing written: a malformed line or a negative number; a block before the data area (`Block number N is before data area`); a block at or past `num_sectors` (`… is behind end of filesystem` — 4.2 compares 512-byte sectors with *logical* ones here, so with 4096-byte sectors only the first eighth of the volume can be listed, and this keeps that limit); a block past the last cluster (4.2 dies with an internal error); and, here only, a block in the FAT32 root directory's cluster, which 4.2 marks bad under the root. Nothing else changes: FAT32's FSInfo free count stays `cluster_count - 1`, as 4.2 writes it, so `fsck.fat` reports it wrong. An empty FILE marks nothing (4.2 refuses it, from a stale `errno` at end of file) | none |
+| `-c` | read every 1024-byte block of the target first and mark the unreadable ones as `-l` does; one before the data area stops the format (`bad blocks before data-area: cannot make fs`). An image file always reads, so it changes nothing there. Not with `-l` (`-c and -l are incompatible`) | off |
 | `--fixed` | treat the target as a fixed disk, so floppy defaults never apply (not in `mkfs.fat`, which asks the kernel) | removable, as `mkfs.fat` treats a file |
 | `--invariant` | fixed serial and timestamps, for reproducible images | off |
 | `--dry-run` | print the geometry and write nothing (not in `mkfs.fat`) | off |
@@ -222,7 +225,7 @@ no root, no dosfstools needed.
 
 ## Golden comparison
 
-`cargo test --release --test golden_compare` (also part of plain `cargo test`) decompresses thirty-three images made by
+`cargo test --release --test golden_compare` (also part of plain `cargo test`) decompresses thirty-eight images made by
 `mkfs.fat 4.2` and requires ours to be identical, byte for byte:
 
 | | |
@@ -236,6 +239,7 @@ no root, no dosfstools needed.
 | 1440 KiB, 16 MiB, 512 MiB | `-m FILE`: a message with tabs, CRs, blank lines and a NUL (FAT12, FAT32), and one too long for the boot code (FAT16, FAT32) |
 | 1440 KiB to 1 GiB | `--mbr=y`: each partition type `mkfs.fat` picks — `0x01` FAT12, `0x04` FAT16 under 65536 sectors, `0x06` within CHS reach, `0x0e` past it (`-F 16` at 1 GiB) and with `-g 255/63`, `0x0c` FAT32 — and a long `-m` message cut at 439 by the table (FAT16, FAT32) |
 | 720 KiB to 512 MiB | `-A` / `--variant atari`: the 720 KiB and 1.44 MB floppies (FAT12), FAT16 at 16 and 64 MiB (2 KiB logical sectors at 64), with a label, `-F 12` at 8 MiB (a FAT too big, so 2 KiB sectors), `-S 2048` held, FAT32 at 512 MiB on 16 KiB sectors, and `--mbr=y` |
+| 1440 KiB to 1 GiB | `-l FILE`: bad blocks on FAT12 (a list in every form `strtoll` takes, and an entry straddling two FAT sectors), FAT16, FAT32 (FSInfo untouched), FAT32 on 4 KiB sectors and Atari FAT16 on 2 KiB logical sectors. `make-golden.sh` also checks that `mkfs.fat -c` on an image file writes the plain golden, and logs what 4.2 does with the lists it refuses (`bad-probes.log`, in the tar) |
 
 Regenerate them with `tests/make-golden.sh` on a host with dosfstools, as an
 ordinary user. With dev retired, that host is a build VM:

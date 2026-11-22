@@ -48,6 +48,7 @@ to find out why it is there.
 | `bytes` | little-endian accessors for the packed on-disk format |
 | `structs` | byte-exact on-disk structures: boot sector, FSInfo, dir entry, LFN |
 | `params` | `mkfs.fat` options and the defaults it applies |
+| `badblocks` | `-l` / `-c`: the bad block list and the clusters it marks |
 | `layout` | the geometry search: cluster size, FAT length, FAT type |
 | `fat` | FAT entry packing for all three widths |
 | `format` | the formatter (`format`, `format_with`) |
@@ -61,7 +62,7 @@ component (no container, port or config). The CLI flags and their divergences
 from `mkfs.fat` (`-H` for hidden sectors, `--fixed`, `--dry-run`) are tabled in README,
 with `--mbr`, whose `auto` reads Linux sysfs as `mkfs.fat` does.
 The `mkfs.fat` flags not built are absent from the CLI (unknown flag) and
-each is a `gap` issue: #7 `-c`/`-l`, #9 `--offset`,
+each is a `gap` issue: #9 `--offset`,
 #11 `--codepage` (`-I`, `-A`, `--variant` are built).
 
 ## Work plan
@@ -74,8 +75,8 @@ each is a `gap` issue: #7 `-c`/`-l`, #9 `--offset`,
       the 4085 / 65525 cluster thresholds, alignment
 - [x] `format` — the formatter
 - [x] Golden references captured from real `mkfs.fat --invariant`; byte-exact
-      across twenty-four configurations, FAT12 through FAT32 (four with `-m`,
-      eight with `--mbr`)
+      across thirty-eight configurations, FAT12 through FAT32 (four with `-m`,
+      eight with `--mbr`, nine Atari, five with `-l`)
 - [x] `fs` — the read layer (boot sector, FAT chains, directories)
 - [x] `fsck` — chain validation, cross-links, lost clusters, FSInfo
 - [x] CLI binaries `mkfs-fat`, `fsck-fat`
@@ -109,7 +110,15 @@ each is a `gap` issue: #7 `-c`/`-l`, #9 `--offset`,
       test each (plus FAT32 zero/overflowing length); sc-build 879a0c2
       passed (87 lib + 4 mkfs-fat unit tests, 24 goldens, clippy clean); the
       race test fails with the lock removed
-- [ ] #7 Bad block list (`-c`, `-l`), which marks clusters `0x…fff7`
+- [x] #7 bad blocks `-l FILE` / `-c` (2026-11-21): `badblocks` module after
+      dosfstools 4.2 `get_list_blocks()` / `check_blocks()` /
+      `mark_FAT_sector()`, `Params::bad_blocks`; clusters marked `0x…ff7` in
+      every FAT, FSInfo left at `cluster_count - 1` as 4.2 leaves it. 4.2's
+      refusals kept (incl. its 512-vs-logical sector bound); a block in the
+      FAT32 root cluster refused here (4.2 writes a root its fsck.fat cannot
+      walk); an empty list accepted (4.2's stale-errno refusal not copied).
+      Five `-bad` goldens recorded by mkfs.fat 4.2 on a build VM, plus a
+      `-c` check and a probe log (`bad-probes.log`)
 - [x] #8 `--mbr[=y|n|a]` (2026-11-21): `FakeMbr` after dosfstools 4.2
       `setup_tables()` (signature at 440, one active entry at 446, message cut
       at 439); CLI `auto` as `get_device_info()` (fixed whole-disk block device
