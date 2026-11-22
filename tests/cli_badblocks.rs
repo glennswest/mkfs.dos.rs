@@ -38,8 +38,9 @@ fn a_bad_block_list_writes_what_mkfs_fat_writes() {
     let list = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/bad-1440k.txt");
     let out = mkfs(&["--invariant", "-l", list.to_str().unwrap(), img.to_str().unwrap()]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    // Seven lines with a number, the duplicate counted, as mkfs.fat counts.
-    assert!(String::from_utf8_lossy(&out.stdout).starts_with("7 bad blocks\n"));
+    // Six lines with a number, the duplicate 186 counted, as mkfs.fat 4.2
+    // counts them (its -v dump says "6 bad blocks").
+    assert!(String::from_utf8_lossy(&out.stdout).starts_with("6 bad blocks\n"));
     assert!(std::fs::read(&img).unwrap() == golden("fat12-1440k-bad"));
 }
 
