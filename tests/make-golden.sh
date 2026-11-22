@@ -74,6 +74,17 @@ CASES=(
     "atari-32m-s2048:32768:-A -S 2048"
     "atari-512m:524288:-A"
     "atari-16m-mbr:16384:-A --mbr=y"
+    # -l FILE (#7): clusters marked bad in every FAT. FAT12 with a list in
+    # every form strtoll takes (spaces, blank lines, +, CR, a leading 0, a
+    # duplicate, no final newline) and an entry straddling FAT sectors 0/1
+    # (block 186: clusters 341/342); FAT16; FAT32 (FSInfo left at
+    # cluster_count - 1, as 4.2 leaves it); FAT32 on 4 KiB sectors and Atari
+    # on 2 KiB logical sectors, inside 4.2's hard-vs-logical sector limit.
+    "fat12-1440k-bad:1440:-l $GOLDEN/bad-1440k.txt"
+    "fat16-16m-bad:16384:-l $GOLDEN/bad-16m.txt"
+    "fat32-512m-bad:524288:-l $GOLDEN/bad-fat32-512m.txt"
+    "fat32-1g-4k-bad:1048576:-S 4096 -l $GOLDEN/bad-fat32-1g-4k.txt"
+    "atari-64m-bad:65536:-A -l $GOLDEN/bad-atari-64m.txt"
 )
 
 for case in "${CASES[@]}"; do
@@ -102,6 +113,60 @@ for case in "fat12-1440k:1440" "fat16-16m:16384"; do
     )
     echo "checked -C against $name"
 done
+
+# -c (#7): on an image file every block reads, so `mkfs.fat -c` writes the
+# plain golden — the reference for `mkfs-fat -c` (tests/cli_badblocks.rs).
+(
+    cd "$W"
+    truncate -s $((1440 * 1024)) check.img
+    mkfs.fat --invariant -c check.img > /dev/null
+    gzip -dc fat12-1440k.img.gz | cmp - check.img
+    rm check.img
+)
+echo "checked -c against fat12-1440k"
+
+# What 4.2 does with lists it refuses, or accepts and should not: exit
+# status and output, into bad-probes.log (kept in the tar, not a golden).
+# fsck.fat -n is run over every -l golden and over the FAT32 root-cluster
+# case, which 4.2 formats with its root directory's cluster marked bad.
+(
+    cd "$W"
+    probe() {   # probe NAME KIB LIST-CONTENT MKFS-ARGS...
+        local name=$1 kib=$2 list=$3; shift 3
+        printf '%b' "$list" > "$name.list"
+        truncate -s $((kib * 1024)) "$name.img"
+        echo "== $name: mkfs.fat $* -l <$(printf '%b' "$list" | tr '\n' ' ')>"
+        set +e
+        mkfs.fat --invariant "$@" -l "$name.list" "$name.img" 2>&1
+        echo "exit $?"
+        set -e
+    }
+    {
+        probe before 1440 '16\n'
+        probe behind 1440 '1440\n'
+        probe minus-one 1440 '-1\n'
+        probe minus-zero 1440 '-0\n'
+        probe hex 1440 '0x20\n'
+        probe word 1440 '17\nseventeen\n'
+        probe two 1440 '17 18\n'
+        probe range 1440 '99999999999999999999\n'
+        probe empty 1440 ''
+        probe nul 1440 '20\0junk\n'
+        probe fat32-tail 524288 '524284\n'
+        probe fat32-4k-limit 1048576 '131072\n' -S 4096
+        probe fat32-root 524288 '1040\n'
+        echo "== fsck.fat -n fat32-root"; set +e; fsck.fat -n fat32-root.img 2>&1; echo "exit $?"; set -e
+        echo "== -c -l"; set +e; mkfs.fat -c -l before.list before.img 2>&1; echo "exit $?"; set -e
+        for g in fat12-1440k-bad fat16-16m-bad fat32-512m-bad fat32-1g-4k-bad; do
+            gzip -dc "$g.img.gz" > fsck.img
+            echo "== fsck.fat -n $g"; set +e; fsck.fat -n fsck.img 2>&1; echo "exit $?"; set -e
+        done
+        rm -f fsck.img
+    } > bad-probes.log
+    rm -f ./*.list before.img behind.img minus-*.img hex.img word.img two.img \
+        range.img empty.img nul.img fat32-*.img
+    cat bad-probes.log
+)
 
 if [[ -n $TAR ]]; then
     mkdir -p "$(dirname "$TAR")"   # tmp/ is gitignored, so absent in a fresh clone
