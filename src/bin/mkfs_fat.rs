@@ -152,7 +152,9 @@ struct Args {
     /// disk other than a loop device) the hidden sectors become start +
     /// SECTOR unless `-H` is given, as in `mkfs.fat`; on an image file they
     /// stay 0.
-    #[arg(long, value_name = "SECTOR")]
+    // allow_hyphen_values: getopt hands `-1` to --offset as its value, and
+    // 4.2 then says it is out of range; clap would take it for a flag.
+    #[arg(long, value_name = "SECTOR", allow_hyphen_values = true)]
     offset: Option<String>,
 
     /// Use constant values wherever a timestamp or serial number would go, so
@@ -823,6 +825,8 @@ mod tests {
         }
         let a = Args::try_parse_from(["mkfs.fat", "--offset", "2048", "img"]).unwrap();
         assert_eq!(a.offset.as_deref(), Some("2048"));
+        let a = Args::try_parse_from(["mkfs.fat", "--offset", "-1", "img"]).unwrap();
+        assert_eq!((a.offset.as_deref(), a.device.as_str()), (Some("-1"), "img"));
     }
 
     // Hidden sectors: -H wins; else the device's start plus the offset where
