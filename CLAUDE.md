@@ -163,14 +163,19 @@ each is a `gap` issue: #11 `--codepage` (`-I`, `-A`, `--variant`,
       `tests/cli_create.rs` runs `mkfs-fat -C` against it; sc-build ae7dd71
       passed (96 lib + 7 mkfs-fat unit + 2 cli_create tests, 33 goldens,
       clippy clean, `--no-default-features` builds). CLI only: no rev bump
-- [ ] #9 `--offset` (2026-11-21): `Params::offset`, `Geometry::offset` /
+- [x] #9 `--offset` (2026-11-21): `Params::offset`, `Geometry::offset` /
       `compute_sized`, `OffsetDevice`, after dosfstools 4.2 `part_sector`;
       device-wide defaults vs filesystem layout as `establish_params()` /
       `setup_tables()` split them (also fixes BLOCKS < device); hidden =
       block device start + offset (sysfs `start`; never on a file); `-c`
       from the offset (4.2 dies); Atari with a grown sector refused (4.2
       writes past the device). Twelve goldens + `offset-probes.log` from
-      mkfs.fat 4.2 on a build VM (02e67ea/b6e23e3); sc-build pending
+      mkfs.fat 4.2 on a build VM (02e67ea/b6e23e3); `-C --offset` cmp'd
+      against its golden there. sc-build 09ac522 passed (110 lib + 9
+      mkfs-fat unit + 3 cli_offset tests, 50 goldens byte-identical, clippy
+      clean, `--no-default-features` builds). Its two failed runs filed #24
+      (a test's wrong Atari sector size) and #25 (`--offset -1` read as a
+      flag), both fixed. fio.dos.rs bump requested
 - [x] #5 — README stub line listing unbuilt flags removed; the missing flags
       were already absent from the CLI; each filed as a `gap` issue (2026-11-19)
 - [x] #1 — kernel verification runnable without a local build or root
