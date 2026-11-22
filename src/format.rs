@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use futures::future::try_join_all;
 
 use crate::bytes::cdiv;
-use crate::device::BlockDevice;
+use crate::device::{BlockDevice, OffsetDevice};
 use crate::error::Result;
 use crate::layout::Geometry;
 use crate::params::{FatType, Params, Variant, NO_NAME};
@@ -106,6 +106,12 @@ pub async fn format_with<D: BlockDevice>(
     // Before anything is read or written: a geometry made for another device,
     // or edited by hand, is refused here (finding d2c8cc3b5b0e).
     geometry.validate(device.size(), device.logical_sector_size())?;
+    // `--offset`: everything below is written into a window that starts
+    // `geometry.offset` bytes in, as `seekto()` adds `part_sector *
+    // sector_size` to every position. The one read of the device itself is
+    // the disk signature, which 4.2 reads from sector 0 of the device.
+    let whole = device;
+    let device = &OffsetDevice::new(whole, geometry.offset)?;
     let label = params.resolved_label()?;
     let atari = geometry.variant == Variant::Atari;
     // The Atari boot sector has room for 24 bits of serial number.
@@ -128,7 +134,7 @@ pub async fn format_with<D: BlockDevice>(
             full_id
         } else {
             let mut old = vec![0u8; geometry.sector_size.max(512) as usize];
-            let existing = match device.read_at(0, &mut old).await {
+            let existing = match whole.read_at(0, &mut old).await {
                 Ok(()) => FakeMbr::existing_signature(&old),
                 Err(_) => None,
             };

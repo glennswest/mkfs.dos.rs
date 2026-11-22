@@ -73,7 +73,7 @@ pub mod params;
 pub mod structs;
 
 // The things a caller reaches for first, so a simple use looks simple.
-pub use device::{BlockDevice, FileDevice, MemDevice};
+pub use device::{BlockDevice, FileDevice, MemDevice, OffsetDevice};
 pub use error::{Error, Result};
 pub use format::{format, Report};
 pub use fs::Filesystem;

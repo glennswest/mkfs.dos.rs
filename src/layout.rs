@@ -65,6 +65,11 @@ pub struct Geometry {
     pub aligned: bool,
     /// The PC or the Atari boot sector.
     pub variant: Variant,
+    /// Bytes from the start of the device to the boot sector: `--offset`
+    /// ([`Params::offset`]) in sectors of [`Geometry::sector_size`]. Zero for a
+    /// filesystem that starts the device. [`crate::format::format_with`]
+    /// writes everything this far in.
+    pub offset: u64,
 }
 
 impl Geometry {
@@ -118,7 +123,7 @@ impl Geometry {
     /// - the layout itself: the root directory's sectors match its entries,
     ///   the FAT holds an entry for every cluster plus the two reserved ones,
     ///   and the data area ends inside the filesystem, which ends inside the
-    ///   device;
+    ///   device — counted from [`Geometry::offset`];
     /// - FAT32: the FSInfo sector is a reserved sector other than sector 0,
     ///   where it would overwrite the boot sector (finding e791934d20f9), the
     ///   backup boot sector is another, and the root cluster exists;
@@ -186,10 +191,10 @@ impl Geometry {
             return bad("zero sectors".into());
         }
         let bytes = self.total_sectors as u64 * ss;
-        if bytes > device_size {
+        if !matches!(self.offset.checked_add(bytes), Some(end) if end <= device_size) {
             return bad(format!(
-                "{} sectors of {} bytes is {bytes} bytes; the device holds {device_size}",
-                self.total_sectors, self.sector_size
+                "{} sectors of {} bytes is {bytes} bytes at offset {}; the device holds {device_size}",
+                self.total_sectors, self.sector_size, self.offset
             ));
         }
         if self.cluster_count == 0 || self.cluster_count > self.fat_type.max_clusters() {
@@ -247,12 +252,62 @@ impl Geometry {
         Ok(())
     }
 
-    /// Resolve a geometry for a device of `size_bytes`.
+    /// Resolve a geometry for a device of `size_bytes`: a filesystem that
+    /// fills it, from [`Params::offset`] (normally 0) to the end.
     ///
     /// `device_sector_size` is what the device reports; [`Params::sector_size`]
     /// may raise it but never lower it below what the hardware will accept.
     pub fn compute(size_bytes: u64, device_sector_size: u32, params: &Params) -> Result<Self> {
+        Self::compute_sized(size_bytes, None, device_sector_size, params)
+    }
+
+    /// Resolve a geometry for a filesystem of `fs_bytes` (`mkfs.fat`'s BLOCKS
+    /// × 1024; `None` for the rest of the device) on a device of
+    /// `device_bytes`, starting [`Params::offset`] sectors in.
+    ///
+    /// As in dosfstools 4.2, the two sizes are used where `mkfs.fat` uses
+    /// them: `establish_params()` reads the *device* — the floppy formats,
+    /// the CHS geometry, FAT32 from 512 MiB and its cluster size — and
+    /// `setup_tables()` lays out the *filesystem*. The offset is in sectors of
+    /// the sector size asked for (or the device's), as `part_sector *
+    /// sector_size` is there before `setup_tables()` runs.
+    ///
+    /// Refused: an offset at or past the end of the device (4.2: `The device
+    /// … size … is less then the offset …`); a filesystem that does not fit
+    /// between the offset and the end; and an offset with the Atari variant
+    /// when its search enlarges the logical sector. 4.2 measures the
+    /// filesystem from `offset × 512` but writes it at `offset ×` the enlarged
+    /// size, past the end of the device by the difference — give `-S` to fix
+    /// the sector size, or use a floppy size, and the two agree.
+    pub fn compute_sized(
+        device_bytes: u64,
+        fs_bytes: Option<u64>,
+        device_sector_size: u32,
+        params: &Params,
+    ) -> Result<Self> {
         let mut sector_size = resolve_sector_size(device_sector_size, params)?;
+        let asked_sector_size = sector_size;
+        let offset_bytes = params.offset.checked_mul(sector_size as u64).ok_or_else(|| {
+            Error::invalid(format!(
+                "an offset of {} sectors of {sector_size} bytes does not fit in 64 bits",
+                params.offset
+            ))
+        })?;
+        if params.offset > 0 && device_bytes <= offset_bytes {
+            return Err(Error::invalid(format!(
+                "the device size {device_bytes} is less than the offset {offset_bytes}"
+            )));
+        }
+        let room = device_bytes - offset_bytes;
+        let size_bytes = match fs_bytes {
+            None => room,
+            Some(b) if b <= room => b,
+            Some(b) => {
+                return Err(Error::invalid(format!(
+                    "a filesystem of {b} bytes at offset {offset_bytes} does not fit a device of {device_bytes}"
+                )))
+            }
+        };
         let num_fats = params.num_fats.unwrap_or(2);
         if num_fats == 0 {
             return Err(Error::invalid("a filesystem needs at least one FAT"));
@@ -273,7 +328,7 @@ impl Geometry {
         let mut num_sectors = num_sectors as u32;
 
         // --- establish_params() ---------------------------------------------
-        let device_sectors = size_bytes / sector_size as u64;
+        let device_sectors = device_bytes / sector_size as u64;
         let (mut heads, mut sectors_per_track) = default_chs(device_sectors);
         let mut media = 0xf8u8;
         let mut cluster_size: u32 = 4;
@@ -284,7 +339,7 @@ impl Geometry {
         // which is why a 1440 KiB image gets a 0xf0 media byte and 224 root
         // entries rather than the fixed-disk defaults.
         if params.disk_type != DiskType::Fixed {
-            match size_bytes / 1024 {
+            match device_bytes / 1024 {
                 360 => (sectors_per_track, heads, media, cluster_size, def_root_entries) = (9, 2, 0xfd, 2, 112),
                 720 => (sectors_per_track, heads, media, cluster_size, def_root_entries) = (9, 2, 0xf9, 2, 112),
                 1200 => (sectors_per_track, heads, media, cluster_size, def_root_entries) = (15, 2, 0xf9, 1, 224),
@@ -296,7 +351,7 @@ impl Geometry {
 
         // FAT32 above half a gigabyte, unless told otherwise.
         let mut fat_type = params.fat_type;
-        if fat_type.is_none() && size_bytes >= 512 * 1024 * 1024 {
+        if fat_type.is_none() && device_bytes >= 512 * 1024 * 1024 {
             fat_type = Some(FatType::Fat32);
         }
 
@@ -396,6 +451,16 @@ impl Geometry {
                 reserved_sectors,
                 root_entries,
             )?;
+            if params.offset > 0 && a.sector_size != asked_sector_size {
+                return Err(Error::invalid(format!(
+                    "--offset with the Atari variant's logical sectors grown from {asked_sector_size} \
+                     to {} bytes: mkfs.fat 4.2 would write the filesystem {} bytes past where it \
+                     measured it; give -S {} to fix the sector size",
+                    a.sector_size,
+                    params.offset * (a.sector_size - asked_sector_size) as u64,
+                    a.sector_size
+                )));
+            }
             num_sectors = a.num_sectors;
             sector_size = a.sector_size;
             root_dir_sectors = cdiv(root_entries as u64 * 32, sector_size as u64) as u32;
@@ -486,6 +551,7 @@ impl Geometry {
             root_cluster,
             aligned,
             variant: params.variant,
+            offset: params.offset * sector_size as u64,
         };
 
         // `mkfs.fat`'s last check, and it is worth keeping in its own units:
@@ -506,7 +572,7 @@ impl Geometry {
 
         // Alignment can round a 16-bit `-R` or `-r` past 65535; nothing gets
         // past here that the boot sector cannot say (finding e79fc78001cf).
-        geom.validate(size_bytes, device_sector_size)?;
+        geom.validate(device_bytes, device_sector_size)?;
         Ok(geom)
     }
 }

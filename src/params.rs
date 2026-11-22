@@ -299,6 +299,17 @@ pub struct Params {
     /// [`crate::badblocks::parse_list`] reads a `-l` file and
     /// [`crate::badblocks::check_blocks`] does the `-c` scan.
     pub bad_blocks: Vec<u64>,
+    /// `--offset SECTOR`: the filesystem starts this many sectors into the
+    /// device, counted in the sector size [`Params::sector_size`] or the device
+    /// gives, as `mkfs.fat 4.2` counts it, and fills the device from there.
+    /// The defaults `mkfs.fat` takes from the device — the floppy formats, the
+    /// CHS geometry, FAT32 at 512 MiB and its cluster size — still look at the
+    /// whole device. Hidden sectors are not changed: on an image file 4.2
+    /// leaves them as they are, and only on a block device whose start it
+    /// knows does it add the offset; the `mkfs-fat` CLI does that. Not with
+    /// the Atari variant's enlarged logical sectors, where 4.2 would write past
+    /// the end of the device (see [`crate::Geometry::compute`]).
+    pub offset: u64,
 }
 
 impl Params {
@@ -375,6 +386,12 @@ impl Params {
     /// Set the count of sectors before this filesystem.
     pub fn hidden_sectors(mut self, sectors: u32) -> Self {
         self.hidden_sectors = Some(sectors);
+        self
+    }
+
+    /// Start the filesystem `sectors` sectors into the device (`--offset`).
+    pub fn offset(mut self, sectors: u64) -> Self {
+        self.offset = sectors;
         self
     }
 

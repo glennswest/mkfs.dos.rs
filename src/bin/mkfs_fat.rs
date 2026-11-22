@@ -7,7 +7,7 @@ use std::io::{Read, Write};
 
 use clap::{ArgMatches, CommandFactory, FromArgMatches, Parser};
 
-use mkfs_dos::device::{BlockDevice, FileDevice};
+use mkfs_dos::device::{BlockDevice, FileDevice, OffsetDevice};
 use mkfs_dos::format::format_with;
 use mkfs_dos::layout::Geometry;
 use mkfs_dos::params::{FatType, Params, Variant, OLDGEMDOS_MAX_SECTORS};
@@ -146,6 +146,15 @@ struct Args {
     #[arg(short = 'I')]
     ignore_safety_checks: bool,
 
+    /// Write the filesystem SECTOR sectors into the device — sectors of the
+    /// `-S` size, or the device's (512 on an image file) — filling it from
+    /// there. On a block device whose start is known (a partition, a whole
+    /// disk other than a loop device) the hidden sectors become start +
+    /// SECTOR unless `-H` is given, as in `mkfs.fat`; on an image file they
+    /// stay 0.
+    #[arg(long, value_name = "SECTOR")]
+    offset: Option<String>,
+
     /// Use constant values wherever a timestamp or serial number would go, so
     /// two runs over the same geometry produce identical images.
     #[arg(long)]
@@ -175,6 +184,67 @@ fn parse_hex(name: &str, s: &str) -> anyhow::Result<u32> {
 fn parse_hex_u8(name: &str, s: &str) -> anyhow::Result<u8> {
     let v = parse_hex(name, s)?;
     u8::try_from(v).map_err(|_| anyhow::anyhow!("invalid {name} '{s}': {v:#x} is more than 0xff"))
+}
+
+/// `--offset`, read as dosfstools 4.2 reads it: `strtoll(optarg, &tmp, 0)` —
+/// decimal, `0x` hex or `0` octal, an optional sign — with nothing before or
+/// after the number; then a negative one refused.
+fn parse_offset(s: &str) -> anyhow::Result<u64> {
+    let bad = || anyhow::anyhow!("Bad number for offset : {s}");
+    let (neg, rest) = match s.as_bytes().first() {
+        Some(b'-') => (true, &s[1..]),
+        Some(b'+') => (false, &s[1..]),
+        _ => (false, s),
+    };
+    let (radix, digits) = if let Some(h) = rest.strip_prefix("0x").or_else(|| rest.strip_prefix("0X")) {
+        (16, h)
+    } else if rest.len() > 1 && rest.starts_with('0') {
+        (8, &rest[1..])
+    } else {
+        (10, rest)
+    };
+    if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+        return Err(bad());
+    }
+    // Past the range of a long long is strtoll's ERANGE: the same message.
+    let v = u64::from_str_radix(digits, radix).map_err(|_| bad())?;
+    let limit = if neg { 1u64 << 63 } else { i64::MAX as u64 };
+    if v > limit {
+        return Err(bad());
+    }
+    if neg && v != 0 {
+        anyhow::bail!("FAT offset must be between 0 and {}: {s}", i64::MAX);
+    }
+    Ok(v)
+}
+
+/// `info->geom_start` from dosfstools 4.2 `blkdev_get_start()`: the device's
+/// sysfs `start` (a partition's first sector, in 512-byte units); failing
+/// that, `HDIO_GETGEO`'s start, which this crate cannot ask for without
+/// `unsafe`. A whole disk's driver answers it with 0 — sd, nvme, virtio,
+/// mmc, dm and md do — except the loop driver, which has no `getgeo` and
+/// so no start, and that is taken here from sysfs's `loop` directory.
+/// `None` (4.2's `-1`) leaves the hidden sectors alone.
+fn device_start(sys: &std::path::Path) -> Option<u64> {
+    if let Ok(text) = std::fs::read_to_string(sys.join("start")) {
+        return text.trim().parse().ok();
+    }
+    if sys.join("loop").exists() {
+        None
+    } else {
+        Some(0)
+    }
+}
+
+/// The hidden sectors, as `establish_params()` sets them: `-H` if given;
+/// else device start + offset when the start is known and the sum fits 32
+/// bits; else 0.
+fn hidden_sectors(given: Option<u32>, start: Option<u64>, offset: u64) -> Option<u32> {
+    if given.is_some() {
+        return given;
+    }
+    let sum = start?.checked_add(offset)?;
+    u32::try_from(sum).ok()
 }
 
 /// What `--mbr` asked for: `Some(true)`/`Some(false)`, or `None` for auto.
@@ -317,12 +387,15 @@ fn auto_mbr(path: &str) -> bool {
 /// dosfstools 4.2 does: `open(O_EXCL | O_RDWR | O_CREAT, 0666)`, then
 /// `ftruncate`. An existing file is refused, never truncated. Like
 /// `mkfs.fat`, a file created here stays if the format then fails.
-fn create_image(path: &str, blocks: Option<u64>) -> anyhow::Result<()> {
+/// With `--offset` the file is that many bytes longer, `ftruncate(dev,
+/// part_sector * sector_size + blocks * BLOCK_SIZE)`.
+fn create_image(path: &str, blocks: Option<u64>, offset_bytes: u64) -> anyhow::Result<()> {
     let Some(blocks) = blocks else {
         anyhow::bail!("Need intended size with -C.");
     };
     let size = blocks
         .checked_mul(1024)
+        .and_then(|b| b.checked_add(offset_bytes))
         .ok_or_else(|| anyhow::anyhow!("{blocks} blocks is more bytes than a u64 holds"))?;
     let mut opts = std::fs::OpenOptions::new();
     opts.read(true).write(true).create_new(true);
@@ -423,8 +496,18 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!("-c and -l are incompatible");
     }
 
+    if let Some(o) = &args.offset {
+        params.offset = parse_offset(o)?;
+    }
+
     if args.create {
-        create_image(&args.device, args.blocks)?;
+        // An image file has no sector size of its own: `-S`, or 512.
+        let ss = params.sector_size.unwrap_or(512) as u64;
+        let offset_bytes = params
+            .offset
+            .checked_mul(ss)
+            .ok_or_else(|| anyhow::anyhow!("an offset of {} sectors overflows", params.offset))?;
+        create_image(&args.device, args.blocks, offset_bytes)?;
     }
 
     let device = FileDevice::open(&args.device)
@@ -445,12 +528,42 @@ async fn main() -> anyhow::Result<()> {
     if sysfs.is_some() && params.sector_size.is_none() {
         params.sector_size = Some(device.logical_sector_size());
     }
+    // Hidden sectors: the device's start plus the offset, where 4.2 knows the
+    // start — never on an image file.
+    params.hidden_sectors = hidden_sectors(
+        params.hidden_sectors,
+        sysfs.as_deref().and_then(device_start),
+        params.offset,
+    );
+
+    // `--offset`, in sectors of the size asked for or the device's (512 on an
+    // image file), before the Atari search can enlarge it.
+    let sector0 = params
+        .sector_size
+        .unwrap_or(device.logical_sector_size())
+        .max(device.logical_sector_size()) as u64;
+    let offset_bytes = params
+        .offset
+        .checked_mul(sector0)
+        .ok_or_else(|| anyhow::anyhow!("an offset of {} sectors overflows", params.offset))?;
+    if params.offset > 0 && device.size() <= offset_bytes {
+        anyhow::bail!(
+            "The device {} size {} is less than the offset {offset_bytes}",
+            args.device,
+            device.size()
+        );
+    }
 
     // A block count names a filesystem of that size inside the device, which is
-    // how `mkfs.fat` takes it — 1024-byte blocks, whatever the sector size.
-    let size = format_size(args.blocks, &args.device, device.size())?;
+    // how `mkfs.fat` takes it — 1024-byte blocks, whatever the sector size —
+    // from the offset on. The defaults that come from the device itself are
+    // taken from all of it, as `establish_params()` takes them.
+    let room = device.size() - offset_bytes;
+    let size = format_size(args.blocks, &args.device, room)?;
+    let fs_bytes = args.blocks.map(|_| size);
 
-    let geometry = Geometry::compute(size, device.logical_sector_size(), &params)?;
+    let geometry =
+        Geometry::compute_sized(device.size(), fs_bytes, device.logical_sector_size(), &params)?;
 
     // The warnings `mkfs.fat` gives, in its order: the message overran the
     // boot code area; a sector size past 4096; then FAT32's shorter area.
@@ -493,7 +606,11 @@ async fn main() -> anyhow::Result<()> {
             print!("Searching for bad blocks ");
             std::io::stdout().flush().ok();
         }
-        let bad = mkfs_dos::badblocks::check_blocks(&device, size / 1024).await;
+        // From the offset on: 4.2's `do_check()` seeks there too, then
+        // compares the position with one that leaves the offset out, so
+        // `-c --offset` with an offset always dies there; here it checks.
+        let window = OffsetDevice::new(&device, geometry.offset)?;
+        let bad = mkfs_dos::badblocks::check_blocks(&window, size / 1024).await;
         if args.verbose {
             println!();
         }
@@ -537,6 +654,10 @@ fn print_geometry(g: &Geometry) {
     println!("Sector size:          {}", g.sector_size);
     println!("Cluster size:         {} ({} sectors)", g.cluster_size(), g.sectors_per_cluster);
     println!("Total sectors:        {}", g.total_sectors);
+    if g.offset > 0 {
+        println!("Offset:               {} bytes into the device", g.offset);
+    }
+    println!("Hidden sectors:       {}", g.hidden_sectors);
     println!("Reserved sectors:     {}", g.reserved_sectors);
     println!("FATs:                 {} of {} sectors", g.num_fats, g.fat_length);
     if g.fat_type == FatType::Fat32 {
@@ -653,19 +774,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("new.img");
         let p = path.to_str().unwrap();
-        let err = create_image(p, None).unwrap_err();
+        let err = create_image(p, None, 0).unwrap_err();
         assert_eq!(err.to_string(), "Need intended size with -C.");
         assert!(!path.exists());
 
-        create_image(p, Some(1440)).unwrap();
+        create_image(p, Some(1440), 0).unwrap();
         assert_eq!(std::fs::metadata(&path).unwrap().len(), 1440 * 1024);
 
         std::fs::write(&path, b"keep").unwrap();
-        let err = create_image(p, Some(1440)).unwrap_err();
+        let err = create_image(p, Some(1440), 0).unwrap_err();
         assert!(err.to_string().contains("already exists"), "{err}");
         assert_eq!(std::fs::read(&path).unwrap(), b"keep");
 
-        assert!(create_image(dir.path().join("x").to_str().unwrap(), Some(u64::MAX)).is_err());
+        assert!(create_image(dir.path().join("x").to_str().unwrap(), Some(u64::MAX), 0).is_err());
         let a = Args::try_parse_from(["mkfs.fat", "-C", "img", "1440"]).unwrap();
         assert!(a.create);
         assert_eq!(a.blocks, Some(1440));

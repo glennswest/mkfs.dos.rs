@@ -343,6 +343,71 @@ impl BlockDevice for MemDevice {
     }
 }
 
+/// A window onto another device that starts `offset` bytes in: byte 0 here
+/// is byte `offset` there, and the size is what is left after it.
+///
+/// It is how `mkfs.fat --offset` places a filesystem inside a device — the
+/// formatter writes at sector 0 of the window — and how a volume at an offset
+/// into an image is opened or checked again.
+pub struct OffsetDevice<D> {
+    inner: D,
+    offset: u64,
+}
+
+impl<D: BlockDevice> OffsetDevice<D> {
+    /// A window onto `inner` from byte `offset` to its end. An offset at or
+    /// past the end leaves nothing to address and is refused.
+    pub fn new(inner: D, offset: u64) -> Result<Self> {
+        let size = inner.size();
+        if offset >= size {
+            return Err(Error::invalid(format!(
+                "an offset of {offset} bytes is not inside a device of {size}"
+            )));
+        }
+        Ok(Self { inner, offset })
+    }
+
+    /// Where the window starts on the device underneath, in bytes.
+    pub fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    /// The device underneath.
+    pub fn inner(&self) -> &D {
+        &self.inner
+    }
+}
+
+#[async_trait::async_trait]
+impl<D: BlockDevice> BlockDevice for OffsetDevice<D> {
+    fn size(&self) -> u64 {
+        self.inner.size() - self.offset
+    }
+
+    fn logical_sector_size(&self) -> u32 {
+        self.inner.logical_sector_size()
+    }
+
+    async fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<()> {
+        check_bounds(offset, buf.len() as u64, self.size())?;
+        self.inner.read_at(self.offset + offset, buf).await
+    }
+
+    async fn write_at(&self, offset: u64, buf: &[u8]) -> Result<()> {
+        check_bounds(offset, buf.len() as u64, self.size())?;
+        self.inner.write_at(self.offset + offset, buf).await
+    }
+
+    async fn flush(&self) -> Result<()> {
+        self.inner.flush().await
+    }
+
+    async fn write_zeroes(&self, offset: u64, len: u64) -> Result<()> {
+        check_bounds(offset, len, self.size())?;
+        self.inner.write_zeroes(self.offset + offset, len).await
+    }
+}
+
 /// Blanket implementation so `&D` is itself a device.
 ///
 /// Lets a caller check or format a device it only borrowed, and run several
