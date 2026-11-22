@@ -49,6 +49,7 @@
 //! | [`device`] | the [`BlockDevice`] trait and its file / memory implementations |
 //! | [`structs`] | byte-exact on-disk structures |
 //! | [`params`] | `mkfs.fat` options and the defaults it applies |
+//! | [`badblocks`] | `-l` / `-c`: the bad block list, and the clusters it marks |
 //! | [`layout`] | the geometry search: cluster size, FAT length, FAT width |
 //! | [`fat`] | entry packing for all three widths |
 //! | [`format`] | the formatter |
@@ -59,6 +60,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod badblocks;
 pub mod bytes;
 pub mod device;
 pub mod error;

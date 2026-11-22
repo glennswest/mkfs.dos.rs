@@ -9,6 +9,8 @@
 //! The FATs are written concurrently, since they are disjoint byte ranges and
 //! [`BlockDevice`] takes `&self`.
 
+use std::collections::BTreeMap;
+
 use futures::future::try_join_all;
 
 use crate::bytes::cdiv;
@@ -55,6 +57,11 @@ pub struct Report {
     /// A `-m` message ran into the MBR table and was cut at offset 439 —
     /// `mkfs.fat` prints `Warning: message too long; truncated`.
     pub message_cut_by_mbr: bool,
+    /// Bad blocks marked, one per entry of [`Params::bad_blocks`] — the
+    /// number `mkfs.fat` prints as `N bad blocks`, duplicates included.
+    pub bad_blocks: usize,
+    /// Distinct clusters marked bad in the FATs.
+    pub bad_clusters: u32,
     /// The geometry, in full.
     pub geometry: Geometry,
 }
@@ -106,6 +113,9 @@ pub async fn format_with<D: BlockDevice>(
     let volume_id = if atari { full_id & 0x00ff_ffff } else { full_id };
     let bs = build_boot_sector(geometry, params, label, volume_id)?;
     let ss = geometry.sector_size as u64;
+    // Bad blocks are checked before the first write too: a refused block
+    // leaves the device as it was, as `mkfs.fat` dies before `write_tables`.
+    let bad_clusters = crate::badblocks::bad_clusters(geometry, &params.bad_blocks)?;
 
     // `--mbr`: the disk signature. `--invariant` uses the volume serial; else
     // the one already on the device is kept, as `mkfs.fat` keeps it, so a
@@ -189,15 +199,20 @@ pub async fn format_with<D: BlockDevice>(
     }
 
     // Every FAT starts the same: two reserved entries, then — on FAT32 — the
-    // root directory's one-cluster chain. Everything after that is free.
-    let first_fat_sectors = first_fat_content(geometry);
+    // root directory's one-cluster chain, then whatever `-l`/`-c` marked bad.
+    // Everything else is free. Only the sectors holding something are
+    // written over the zeroes.
+    let fat_sectors = fat_sectors(geometry, &bad_clusters);
     let fat_bytes = geometry.fat_length as u64 * ss;
     let writes = (0..geometry.num_fats as u64).map(|i| {
         let start = geometry.fat_start_sector() as u64 * ss + i * fat_bytes;
-        let head = &first_fat_sectors;
+        let sectors = &fat_sectors;
         async move {
             device.write_zeroes(start, fat_bytes).await?;
-            device.write_at(start, head).await
+            for (index, sector) in sectors {
+                device.write_at(start + index * ss, sector).await?;
+            }
+            Ok::<(), crate::error::Error>(())
         }
     });
     try_join_all(writes).await?;
@@ -248,6 +263,8 @@ pub async fn format_with<D: BlockDevice>(
         data_bytes: geometry.data_bytes(),
         disk_signature: mbr.map(|t| t.disk_signature),
         message_cut_by_mbr,
+        bad_blocks: params.bad_blocks.len(),
+        bad_clusters: bad_clusters.len() as u32,
         geometry: geometry.clone(),
     })
 }
@@ -417,6 +434,49 @@ fn first_fat_content(geometry: &Geometry) -> Vec<u8> {
         crate::fat::set_entry(&mut buf, geometry.fat_type, 2, eof);
     }
     buf
+}
+
+/// The sectors of one FAT that are not all zero, by index from the FAT's
+/// start: the head [`first_fat_content`] gives, with each bad cluster's entry
+/// set to the bad marker (`mark_FAT_cluster(c, FAT_BAD)`). A FAT12 entry can
+/// straddle two sectors, so entries are set byte by byte.
+fn fat_sectors(geometry: &Geometry, bad_clusters: &[u32]) -> BTreeMap<u64, Vec<u8>> {
+    let ss = geometry.sector_size as u64;
+    let mut sectors = BTreeMap::new();
+    for (i, chunk) in first_fat_content(geometry).chunks(ss as usize).enumerate() {
+        sectors.insert(i as u64, chunk.to_vec());
+    }
+    let fat_type = geometry.fat_type;
+    let bad = fat_type.bad_marker();
+    let mut byte = |sectors: &mut BTreeMap<u64, Vec<u8>>, offset: u64| -> (u64, usize) {
+        let index = offset / ss;
+        sectors.entry(index).or_insert_with(|| vec![0u8; ss as usize]);
+        (index, (offset % ss) as usize)
+    };
+    for &cluster in bad_clusters {
+        let offset = crate::fat::entry_offset(fat_type, cluster);
+        match fat_type {
+            FatType::Fat12 => {
+                let (li, lo) = byte(&mut sectors, offset);
+                let (hi, ho) = byte(&mut sectors, offset + 1);
+                let (l, h) = crate::fat::set_entry12_split(
+                    sectors[&li][lo],
+                    sectors[&hi][ho],
+                    cluster,
+                    bad,
+                );
+                sectors.get_mut(&li).unwrap()[lo] = l;
+                sectors.get_mut(&hi).unwrap()[ho] = h;
+            }
+            // Aligned entries never straddle a sector.
+            FatType::Fat16 | FatType::Fat32 => {
+                let (index, at) = byte(&mut sectors, offset);
+                let sector = sectors.get_mut(&index).unwrap();
+                crate::fat::set_entry(&mut sector[at..], fat_type, 0, bad);
+            }
+        }
+    }
+    sectors
 }
 
 /// The root directory entry that carries the volume label.
@@ -734,5 +794,72 @@ mod tests {
         assert_eq!(image[439], 0);
         let (_, report) = make(16 * MIB, &Params::new().boot_message(&b"hi"[..]).mbr()).await;
         assert!(!report.message_cut_by_mbr);
+    }
+
+    // -l / -c (#7): every FAT carries the bad marks, including a FAT12 entry
+    // that straddles a sector (cluster 341 at bytes 511/512), and nothing
+    // else in the FAT changes.
+    #[tokio::test]
+    async fn bad_blocks_are_marked_in_every_fat() {
+        // 1.44 MB floppy, data at sector 33, one-sector clusters: block 17 is
+        // clusters 3 and 4, block 186 is clusters 341 and 342.
+        let blocks = vec![17, 186, 186];
+        let (dev, report) =
+            make(1440 * 1024, &Params::new().invariant().bad_blocks(blocks)).await;
+        assert_eq!((report.bad_blocks, report.bad_clusters), (3, 4));
+        let g = &report.geometry;
+        let image = dev.to_vec();
+        let (clean, _) = make(1440 * 1024, &Params::new().invariant()).await;
+        let clean = clean.to_vec();
+        for copy in 0..g.num_fats as usize {
+            let start = (g.fat_start_sector() as usize + copy * g.fat_length as usize) * 512;
+            let fat = &image[start..start + g.fat_length as usize * 512];
+            let clean_fat = &clean[start..start + g.fat_length as usize * 512];
+            for c in 0..g.fat_entries() {
+                let want = if [3, 4, 341, 342].contains(&c) {
+                    0xff7
+                } else {
+                    crate::fat::get_entry(clean_fat, FatType::Fat12, c)
+                };
+                assert_eq!(crate::fat::get_entry(fat, FatType::Fat12, c), want, "FAT {copy} cluster {c}");
+            }
+        }
+        // Outside the FATs the two images are the same.
+        let fats = g.fat_start_sector() as usize * 512
+            ..g.root_dir_start_sector() as usize * 512;
+        for (i, (a, b)) in image.iter().zip(&clean).enumerate() {
+            if !fats.contains(&i) {
+                assert_eq!(a, b, "byte {i}");
+            }
+        }
+    }
+
+    // FAT32: the mark is 0x0ffffff7, and the FSInfo free count is the one
+    // mkfs.fat 4.2 writes, cluster_count - 1, bad clusters or not.
+    #[tokio::test]
+    async fn fat32_bad_blocks_leave_fsinfo_as_mkfs_fat_does() {
+        let g = Geometry::compute(512 * MIB, 512, &Params::new()).unwrap();
+        let cluster3 = (g.first_data_sector() as u64 + g.sectors_per_cluster as u64) / 2;
+        let (dev, report) = make(512 * MIB, &Params::new().bad_blocks(vec![cluster3])).await;
+        let image = dev.to_vec();
+        let fat = &image[g.fat_start_sector() as usize * 512..];
+        assert_eq!(crate::fat::get_entry(fat, FatType::Fat32, 2), 0x0fff_fff8);
+        assert_eq!(crate::fat::get_entry(fat, FatType::Fat32, 3), 0x0fff_fff7);
+        let info = FsInfo::decode(&image[512..1024]).unwrap();
+        assert_eq!(info.free_clusters, report.cluster_count - 1);
+    }
+
+    // A refused block writes nothing.
+    #[tokio::test]
+    async fn a_refused_bad_block_leaves_the_device_untouched() {
+        for block in [0u64, 16, 1440, u64::MAX] {
+            let dev = patterned(1440 * 1024).await;
+            let before = dev.to_vec();
+            let err = format(&dev, &Params::new().bad_blocks(vec![17, block]))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, crate::Error::InvalidParams(_)), "{err}");
+            assert!(dev.to_vec() == before, "block {block} wrote to the device");
+        }
     }
 }

@@ -3,7 +3,7 @@
 //! Flags follow dosfstools' `mkfs.fat` where they mean the same thing, so
 //! muscle memory and existing scripts carry over.
 
-use std::io::Read;
+use std::io::{Read, Write};
 
 use clap::{ArgMatches, CommandFactory, FromArgMatches, Parser};
 
@@ -78,6 +78,18 @@ struct Args {
     /// what the volume prints if a machine tries to boot from it.
     #[arg(short = 'm', long = "message-file", value_name = "FILE")]
     message_file: Option<String>,
+
+    /// Read every 1024-byte block of the target before formatting and mark
+    /// the clusters holding unreadable ones bad. A bad block before the data
+    /// area stops the format.
+    #[arg(short = 'c', long = "check")]
+    check: bool,
+
+    /// Read a list of bad blocks from FILE: one 1024-byte block number per
+    /// line, counted from the start of the filesystem. The clusters holding
+    /// them are marked bad in every FAT.
+    #[arg(short = 'l', long = "bad-blocks-file", value_name = "FILE")]
+    bad_blocks_file: Option<String>,
 
     /// Sector holding the backup boot sector. FAT32 only.
     #[arg(short = 'b', long)]
@@ -405,6 +417,12 @@ async fn main() -> anyhow::Result<()> {
         params.boot_message = Some(raw);
     }
 
+    // Auto and specified bad block handling are mutually exclusive, and
+    // `mkfs.fat` says so before it opens anything.
+    if args.check && args.bad_blocks_file.is_some() {
+        anyhow::bail!("-c and -l are incompatible");
+    }
+
     if args.create {
         create_image(&args.device, args.blocks)?;
     }
@@ -461,6 +479,31 @@ async fn main() -> anyhow::Result<()> {
 
     if geometry.variant == Variant::Atari && geometry.total_sectors >= OLDGEMDOS_MAX_SECTORS {
         println!("Warning: More than 32765 sector need TOS 1.04 or higher.");
+    }
+
+    // Bad blocks, where `mkfs.fat` finds them: after `setup_tables()`,
+    // before anything is written. Every block is checked here, so a refused
+    // one stops the format with the device untouched (and --dry-run says so).
+    if let Some(path) = &args.bad_blocks_file {
+        let text = std::fs::read(path)
+            .map_err(|e| anyhow::anyhow!("Can't open file of bad blocks {path}: {e}"))?;
+        params.bad_blocks = mkfs_dos::badblocks::parse_list(&text)?;
+    } else if args.check {
+        if args.verbose {
+            print!("Searching for bad blocks ");
+            std::io::stdout().flush().ok();
+        }
+        let bad = mkfs_dos::badblocks::check_blocks(&device, size / 1024).await;
+        if args.verbose {
+            println!();
+        }
+        mkfs_dos::badblocks::check_before_data(&geometry, &bad)?;
+        params.bad_blocks = bad;
+    }
+    mkfs_dos::badblocks::bad_clusters(&geometry, &params.bad_blocks)?;
+    if !params.bad_blocks.is_empty() && !args.quiet {
+        let n = params.bad_blocks.len();
+        println!("{n} bad block{}", if n > 1 { "s" } else { "" });
     }
 
     if args.dry_run {

@@ -293,6 +293,12 @@ pub struct Params {
     /// `-A`, `--variant`: the PC boot sector, or the Atari one. See
     /// [`Variant`].
     pub variant: Variant,
+    /// `-l FILE` / `-c`: bad blocks, as 1024-byte block numbers from the start
+    /// of the filesystem. The cluster holding each is marked bad in every FAT;
+    /// [`crate::badblocks`] has the rules, which are `mkfs.fat 4.2`'s.
+    /// [`crate::badblocks::parse_list`] reads a `-l` file and
+    /// [`crate::badblocks::check_blocks`] does the `-c` scan.
+    pub bad_blocks: Vec<u64>,
 }
 
 impl Params {
@@ -411,6 +417,12 @@ impl Params {
     /// Write the Atari variant — `mkfs.fat -A`, `--variant atari`.
     pub fn atari(mut self) -> Self {
         self.variant = Variant::Atari;
+        self
+    }
+
+    /// Mark these 1024-byte blocks bad (`-l`).
+    pub fn bad_blocks(mut self, blocks: impl Into<Vec<u64>>) -> Self {
+        self.bad_blocks = blocks.into();
         self
     }
 
