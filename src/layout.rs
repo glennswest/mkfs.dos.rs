@@ -1215,9 +1215,13 @@ mod tests {
         assert_eq!((g.sector_size, g.offset), (512, 5120));
         let g = geom(32 * MIB, &Params::new().atari().sector_size(2048).offset(16));
         assert_eq!((g.sector_size, g.offset), (2048, 32768));
+        // 64 MiB less 8 sectors, trimmed to whole tracks, halves once to fit
+        // 65531: 1024-byte sectors, so the offset would move by 4 KiB.
         let err = geom_err(64 * MIB, &Params::new().atari().offset(8));
-        assert!(err.contains("-S 2048"), "{err}");
-        assert!(geom(64 * MIB, &Params::new().atari()).sector_size > 512);
+        assert!(err.contains("grown from 512 to 1024") && err.contains("-S 1024"), "{err}");
+        // What the message suggests works.
+        let g = geom(64 * MIB, &Params::new().atari().sector_size(1024).offset(8));
+        assert_eq!((g.sector_size, g.offset), (1024, 8192));
     }
 
     // The geometry is checked against the device from its offset on.

@@ -91,8 +91,9 @@ fn offset_refusals_leave_the_device_alone() {
         (1440 * 1024, &["--offset", "08"], "Bad number for offset : 08"),
         (1440 * 1024, &["--offset", "8x"], "Bad number for offset : 8x"),
         (1440 * 1024, &["--offset", "2880"], "less than the offset"),
-        // 4.2 writes this one, a volume ending 12 KiB past the device.
-        (64 * MIB, &["-A", "--offset", "8"], "give -S 2048"),
+        // 4.2 writes this one: measured from 8 x 512, written at 8 x 1024,
+        // so the volume ends 4 KiB past the device.
+        (64 * MIB, &["-A", "--offset", "8"], "give -S 1024"),
     ];
     for (size, args, want) in cases {
         let p = image(dir.path(), "refused", *size);
