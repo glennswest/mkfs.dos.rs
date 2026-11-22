@@ -29,7 +29,7 @@ mkfs.fat --help 2>&1 | head -1
 W=$(mktemp -d "${TMPDIR:-/tmp}/mkfs-dos-golden.XXXXXX")
 trap 'rm -rf "$W"' EXIT
 
-# name:size-kib:mkfs.fat args. A `-m` names a file in tests/golden.
+# name:size-kib:mkfs.fat args[:BLOCKS]. A `-m` names a file in tests/golden.
 CASES=(
     "fat12-1440k:1440:"
     "fat12-8m:8192:"
@@ -85,16 +85,37 @@ CASES=(
     "fat32-512m-bad:524288:-l $GOLDEN/bad-fat32-512m.txt"
     "fat32-1g-4k-bad:1048576:-S 4096 -l $GOLDEN/bad-fat32-1g-4k.txt"
     "atari-64m-bad:65536:-A -l $GOLDEN/bad-atari-64m.txt"
+    # --offset (#9): the filesystem from sector N on, hidden sectors left at
+    # 0 on an image file. The defaults establish_params() takes from the
+    # device — floppy match, CHS, FAT32 from 512 MiB — see the whole file
+    # (1440k-off63 keeps the floppy parameters; 520m-off32768 is FAT32 with
+    # 504 MiB left). 4 KiB sectors count the offset in 4 KiB; a fake MBR
+    # goes at the offset; -h wins; hex with a BLOCKS count inside the rest;
+    # Atari where the sector size does not grow (a floppy, -S 2048). And
+    # BLOCKS alone on a bigger file: the device decides, not BLOCKS (no
+    # floppy parameters for 1440 blocks of a 2 MiB file).
+    "fat12-1440k-off63:1440:--offset 63"
+    "fat16-64m-off2048:65536:--offset 2048"
+    "fat16-17m-off2048:17408:--offset 2048"
+    "fat32-1g-off2048:1048576:--offset 2048"
+    "fat32-520m-off32768:532480:--offset 32768"
+    "fat32-1g-4k-off256:1048576:-S 4096 --offset 256"
+    "fat16-64m-off2048-mbr:65536:--offset 2048 --mbr=y"
+    "fat16-64m-off2048-h:65536:--offset 2048 -h 2048"
+    "fat16-64m-off0x800-blocks:65536:--offset 0x800:16384"
+    "fat12-2m-blocks1440:2048::1440"
+    "atari-1440k-off10:1440:-A --offset 10"
+    "atari-32m-s2048-off16:32768:-A -S 2048 --offset 16"
 )
 
 for case in "${CASES[@]}"; do
-    IFS=: read -r name kib args <<< "$case"
+    IFS=: read -r name kib args blocks <<< "$case"
     # Run inside $W so the dump names the image, not the build VM's paths.
-    # shellcheck disable=SC2086 # args is a word list on purpose
+    # shellcheck disable=SC2086 # args and blocks are word lists on purpose
     (
         cd "$W"
         truncate -s $((kib * 1024)) "$name.img"
-        mkfs.fat --invariant -v $args "$name.img" > "$name.dump" 2>&1
+        mkfs.fat --invariant -v $args "$name.img" $blocks > "$name.dump" 2>&1
         gzip -9 -f "$name.img"
     )
     echo "recorded $name"
@@ -113,6 +134,16 @@ for case in "fat12-1440k:1440" "fat16-16m:16384"; do
     )
     echo "checked -C against $name"
 done
+
+# -C --offset (#9): the file is offset + BLOCKS x 1024 bytes, formatted from
+# the offset — the 17 MiB golden with 16 MiB of filesystem at sector 2048.
+(
+    cd "$W"
+    mkfs.fat --invariant -C --offset 2048 off-create.img 16384 > /dev/null
+    gzip -dc fat16-17m-off2048.img.gz | cmp - off-create.img
+    rm off-create.img
+)
+echo "checked -C --offset against fat16-17m-off2048"
 
 # -c (#7): on an image file every block reads, so `mkfs.fat -c` writes the
 # plain golden — the reference for `mkfs-fat -c` (tests/cli_badblocks.rs).
@@ -163,6 +194,42 @@ echo "checked -c against fat12-1440k"
         done
         rm -f fsck.img
     } > bad-probes.log
+    # --offset (#9): what 4.2 refuses, -c with an offset, and Atari when the
+    # logical sector grows (the file length after it says where it wrote).
+    # fsck.fat -n over the filesystem cut out of each offset golden.
+    oprobe() {   # oprobe NAME KIB MKFS-ARGS...
+        local name=$1 kib=$2; shift 2
+        truncate -s $((kib * 1024)) "$name.img"
+        echo "== $name: mkfs.fat $*"
+        set +e
+        mkfs.fat --invariant "$@" "$name.img" 2>&1
+        echo "exit $? size $(stat -c %s "$name.img")"
+        set -e
+        rm -f "$name.img"
+    }
+    {
+        oprobe past-end 1440 --offset 2880
+        oprobe at-end 1440 --offset 2879
+        oprobe negative 1440 --offset -1
+        oprobe minus-zero 1440 --offset -0
+        oprobe octal-bad 1440 --offset 08
+        oprobe octal 1440 --offset 010
+        oprobe space 1440 --offset ' 8'
+        oprobe trailing 1440 --offset 8x
+        oprobe huge 1440 --offset 99999999999999999999
+        oprobe check 65536 -c --offset 2048
+        oprobe atari-grow 65536 -A --offset 8
+        oprobe atari-hidden-16 65536 -A -S 2048 --offset 70000
+        for g in fat12-1440k-off63:63:512 fat16-64m-off2048:2048:512 \
+                 fat32-1g-off2048:2048:512 fat32-1g-4k-off256:256:4096 \
+                 fat32-520m-off32768:32768:512 atari-32m-s2048-off16:16:2048; do
+            IFS=: read -r n sec ss <<< "$g"
+            gzip -dc "$n.img.gz" | tail -c +$((sec * ss + 1)) > fsck.img
+            echo "== fsck.fat -n $n (from byte $((sec * ss)))"; set +e; fsck.fat -n fsck.img 2>&1; echo "exit $?"; set -e
+        done
+        rm -f fsck.img
+    } > offset-probes.log
+    cat offset-probes.log
     rm -f ./*.list before.img behind.img minus-*.img hex.img word.img two.img \
         range.img empty.img nul.img fat32-*.img
     cat bad-probes.log
