@@ -118,7 +118,10 @@ each is a `gap` issue: #9 `--offset`,
       FAT32 root cluster refused here (4.2 writes a root its fsck.fat cannot
       walk); an empty list accepted (4.2's stale-errno refusal not copied).
       Five `-bad` goldens recorded by mkfs.fat 4.2 on a build VM, plus a
-      `-c` check and a probe log (`bad-probes.log`)
+      `-c` check and a probe log (`bad-probes.log`); sc-build ded1f1f passed
+      (106 lib + 7 mkfs-fat unit + 3 cli_badblocks + 2 cli_create tests, 38
+      goldens byte-identical, clippy clean, `--no-default-features` builds).
+      fio.dos.rs bump requested
 - [x] #8 `--mbr[=y|n|a]` (2026-11-21): `FakeMbr` after dosfstools 4.2
       `setup_tables()` (signature at 440, one active entry at 446, message cut
       at 439); CLI `auto` as `get_device_info()` (fixed whole-disk block device
