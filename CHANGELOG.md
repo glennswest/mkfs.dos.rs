@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### 2026-11-24
+- **feat:** `mkfs-fat --codepage N` (437, 850, 852, 866), `Params::codepage`,
+  the `codepage` module (`mkfs_dos::Codepage`) and
+  `params::encode_label_in`, after dosfstools 4.2 `charconv.c` and
+  `validate_volume_label()`. The label is converted into the code page
+  (850 by default) and, as 4.2 on x86 does with its signed-`char` test,
+  refused if it is not ASCII: `Labels with characters below 0x20 are not
+  allowed` for a character the code page has, `Error when processing
+  label` (with iconv's message) for one it lacks. No byte depends on the
+  code page. `--codepage` is read as `strtol` reads it (`Invalid codepage :
+  …`), and the first one given is used, as 4.2's conversion initialises
+  once; a code page other than the four is refused (4.2 takes any iconv
+  knows). Label checks now run in 4.2's order, and a control character gets
+  4.2's message. `make-golden.sh` cmps 4.2's output with each code page
+  against `fat16-64m-label` and logs its refusals; `tests/cli_codepage.rs`
+  (#11).
+
 ### 2026-11-21
 - **feat:** `mkfs-fat --offset SECTOR` and `Params::offset`: the filesystem
   is written SECTOR sectors into the device and fills it from there, after

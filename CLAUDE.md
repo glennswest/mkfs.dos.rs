@@ -46,6 +46,7 @@ to find out why it is there.
 |---|---|
 | `device` | the `BlockDevice` trait; `FileDevice` (file or block device) and `MemDevice` |
 | `bytes` | little-endian accessors for the packed on-disk format |
+| `codepage` | DOS code pages 437/850/852/866 for the label (`--codepage`) |
 | `structs` | byte-exact on-disk structures: boot sector, FSInfo, dir entry, LFN |
 | `params` | `mkfs.fat` options and the defaults it applies |
 | `badblocks` | `-l` / `-c`: the bad block list and the clusters it marks |
@@ -62,9 +63,8 @@ component (no container, port or config). The CLI flags and their divergences
 from `mkfs.fat` (`-H` for hidden sectors, `--fixed`, `--dry-run`) are tabled in README,
 with `--mbr`, whose `auto` reads Linux sysfs as `mkfs.fat` does, and
 `--offset`, whose hidden sectors read a block device's sysfs `start`.
-The `mkfs.fat` flags not built are absent from the CLI (unknown flag) and
-each is a `gap` issue: #11 `--codepage` (`-I`, `-A`, `--variant`,
-`--offset` are built).
+Every `mkfs.fat 4.2` flag is built; `--codepage` takes the DOS code pages
+437, 850, 852 and 866 only (owner, 2026-11-24), where 4.2 takes any iconv knows.
 
 ## Work plan
 
@@ -144,10 +144,20 @@ each is a `gap` issue: #11 `--codepage` (`-I`, `-A`, `--variant`,
       build VM; sc-build 837eb60 passed (92 lib + 6 mkfs-fat unit tests, 33
       goldens byte-identical, clippy clean). fio.dos.rs#21 asks for the rev
       bump. Reading Atari volumes back is #21 here
-- [ ] #11 `--codepage`: 4.2 on x86 refuses every non-ASCII label (signed
-      `char` in `validate_volume_label`, fixed upstream in c888797b1d after
-      4.2), so for every label 4.2 accepts the bytes are the same whatever
-      the codepage. Waiting on an owner decision on what to build
+- [x] #11 `--codepage` (2026-11-24, owner: match 4.2, DOS code pages 437,
+      850, 852, 866): `codepage` module (glibc 2.42 iconv tables, checked
+      both ways), `Params::codepage`, `encode_label_in`. 4.2 on x86 refuses
+      every non-ASCII label (signed `char` in `validate_volume_label`, fixed
+      upstream in c888797b1d after 4.2): "below 0x20" if the code page has
+      the character, "Error when processing label" if not; kept, so no byte
+      depends on the code page. First `--codepage` wins (`set_dos_codepage`
+      initialises once). `make-golden.sh` cmps 4.2's `--codepage N -n
+      TESTLABEL` against `fat16-64m-label` for all four and logs its
+      refusals (`codepage-probes.log`, in the tar); `tests/cli_codepage.rs`
+      holds `mkfs-fat` to both. sc-build bcc9e63 passed (115 lib + 10
+      mkfs-fat unit + 2 cli_codepage tests, 50 goldens byte-identical,
+      clippy clean, `--no-default-features` builds); the golden run there
+      re-recorded all 50 identical. fio.dos.rs bump requested
 - [ ] #21 fs / fsck-fat: open Atari volumes (no `0xAA55`). Waiting on an
       owner decision (2026-11-22): the FAT12/FAT16 width of an Atari volume
       is not in its boot sector, and dosfstools 4.2 decides it two ways —

@@ -86,6 +86,7 @@ whole device. Flags follow `mkfs.fat` where they mean the same thing:
 | `-f N` | number of FATs | 2 |
 | `-r N` | root directory entries (FAT12/16) | 512, or 112/224 for floppy sizes |
 | `-n LABEL` | volume label, at most 11 characters | `NO NAME` |
+| `--codepage N` | DOS code page of the label: 437, 850, 852 or 866 (4.2 takes any code page iconv knows; others are refused here). As in `mkfs.fat 4.2`, which tests the label's bytes as a signed `char`, a non-ASCII label is refused — `Labels with characters below 0x20 are not allowed` when the code page has the character, `Error when processing label` when it does not — so no byte written depends on it. The first `--codepage` given is used | 850 |
 | `-i HEX` | volume serial number | from the clock |
 | `-M HEX` | media descriptor; more than `0xff` is refused | `0xf8`, or the floppy's historical byte |
 | `-H N` | hidden sectors — **`-H`, not `mkfs.fat`'s `-h`**, which is help here | 0 |
@@ -244,6 +245,7 @@ no root, no dosfstools needed.
 | 1440 KiB to 1 GiB | `--mbr=y`: each partition type `mkfs.fat` picks — `0x01` FAT12, `0x04` FAT16 under 65536 sectors, `0x06` within CHS reach, `0x0e` past it (`-F 16` at 1 GiB) and with `-g 255/63`, `0x0c` FAT32 — and a long `-m` message cut at 439 by the table (FAT16, FAT32) |
 | 720 KiB to 512 MiB | `-A` / `--variant atari`: the 720 KiB and 1.44 MB floppies (FAT12), FAT16 at 16 and 64 MiB (2 KiB logical sectors at 64), with a label, `-F 12` at 8 MiB (a FAT too big, so 2 KiB sectors), `-S 2048` held, FAT32 at 512 MiB on 16 KiB sectors, and `--mbr=y` |
 | 1440 KiB to 1 GiB | `--offset SECTOR`: FAT12 at 63 sectors into a 1440 KiB file (still a floppy's parameters), FAT16 at 2048 (also with `--mbr=y`, with `-h 2048`, as `0x800` with 16384 BLOCKS, and in a 17 MiB file, which `make-golden.sh` checks real `mkfs.fat -C --offset` reproduces), FAT32 at 2048, at 256 4 KiB sectors, and at 32768 in 520 MiB (FAT32, though 504 MiB is left), Atari at 10 into a 1440 KiB floppy and at 16 with `-S 2048`; and BLOCKS alone, 1440 of a 2 MiB file, no floppy parameters. `tests/cli_offset.rs` runs `mkfs-fat` against them; `make-golden.sh` logs 4.2's refusals, `-c --offset` and `fsck.fat -n` over each volume cut out of its golden (`offset-probes.log`, in the tar) |
+| 64 MiB | `--codepage 437/850/852/866 -n TESTLABEL`: `make-golden.sh` checks real `mkfs.fat` writes the labelled FAT16 golden in each, and logs its refusals of non-ASCII labels and unknown code pages (`codepage-probes.log`, in the tar); `tests/cli_codepage.rs` holds `mkfs-fat` to both |
 | 1440 KiB to 1 GiB | `-l FILE`: bad blocks on FAT12 (a list in every form `strtoll` takes, and an entry straddling two FAT sectors), FAT16, FAT32 (FSInfo untouched), FAT32 on 4 KiB sectors and Atari FAT16 on 2 KiB logical sectors. `make-golden.sh` also checks that `mkfs.fat -c` on an image file writes the plain golden, and logs what 4.2 does with the lists it refuses (`bad-probes.log`, in the tar) |
 
 Regenerate them with `tests/make-golden.sh` on a host with dosfstools, as an
