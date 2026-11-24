@@ -11,7 +11,7 @@ use mkfs_dos::device::{BlockDevice, FileDevice, OffsetDevice};
 use mkfs_dos::format::format_with;
 use mkfs_dos::layout::Geometry;
 use mkfs_dos::params::{FatType, Params, Variant, OLDGEMDOS_MAX_SECTORS};
-use mkfs_dos::BootMessage;
+use mkfs_dos::{BootMessage, Codepage};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -53,6 +53,20 @@ struct Args {
     /// Volume label, at most 11 characters.
     #[arg(short = 'n', long)]
     label: Option<String>,
+
+    /// DOS code page the label is encoded in: 437, 850, 852 or 866 (default
+    /// 850). As with `mkfs.fat 4.2`, a label must still be ASCII, so no byte
+    /// written depends on it; it decides how a non-ASCII label is refused.
+    /// The first `--codepage` given is the one used, as in `mkfs.fat`.
+    // allow_hyphen_values: getopt hands `-5` to --codepage as its value, and
+    // 4.2 then calls it invalid; clap would take it for a flag.
+    #[arg(
+        long,
+        value_name = "N",
+        action = clap::ArgAction::Append,
+        allow_hyphen_values = true
+    )]
+    codepage: Vec<String>,
 
     /// Volume serial number, in hex.
     #[arg(short = 'i', long)]
@@ -247,6 +261,47 @@ fn hidden_sectors(given: Option<u32>, start: Option<u64>, offset: u64) -> Option
     }
     let sum = start?.checked_add(offset)?;
     u32::try_from(sum).ok()
+}
+
+/// `--codepage`, read as dosfstools 4.2 reads it: `strtol(optarg, &tmp, 10)`
+/// with nothing before or after the number, then refused below 0 or past
+/// `INT_MAX` with `Invalid codepage : …`.
+fn parse_codepage_number(s: &str) -> anyhow::Result<u32> {
+    let bad = || anyhow::anyhow!("Invalid codepage : {s}");
+    let (neg, digits) = match s.as_bytes().first() {
+        Some(b'-') => (true, &s[1..]),
+        Some(b'+') => (false, &s[1..]),
+        _ => (false, s),
+    };
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(bad());
+    }
+    let v: u64 = digits.parse().map_err(|_| bad())?;
+    if (neg && v != 0) || v > i32::MAX as u64 {
+        return Err(bad());
+    }
+    Ok(v as u32)
+}
+
+/// The code page every `--codepage` leaves, in command-line order. Each must
+/// be a number (`Invalid codepage`); the first decides, because 4.2's
+/// `set_dos_codepage()` initialises its conversion once and answers every
+/// later call with that first result. 4.2 takes whatever code page glibc's
+/// iconv knows; this crate carries the DOS code pages 437, 850, 852 and 866
+/// and refuses the rest, as 4.2 refuses one iconv lacks.
+fn resolve_codepage(values: &[String]) -> anyhow::Result<Codepage> {
+    let mut chosen = None;
+    for v in values {
+        let n = parse_codepage_number(v)?;
+        if chosen.is_none() {
+            chosen = Some(Codepage::from_number(n).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Cannot initialize codepage {n}: mkfs-fat supports codepages 437, 850, 852 and 866"
+                )
+            })?);
+        }
+    }
+    Ok(chosen.unwrap_or_default())
 }
 
 /// What `--mbr` asked for: `Some(true)`/`Some(false)`, or `None` for auto.
@@ -447,6 +502,7 @@ async fn main() -> anyhow::Result<()> {
     params.num_fats = Some(args.num_fats);
     params.root_entries = args.root_entries;
     params.label = args.label.clone();
+    params.codepage = resolve_codepage(&args.codepage)?;
     params.hidden_sectors = args.hidden;
     params.backup_boot = args.backup_boot;
     params.align = !args.no_align;
@@ -687,6 +743,31 @@ fn print_geometry(g: &Geometry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cps(v: &[&str]) -> anyhow::Result<Codepage> {
+        resolve_codepage(&v.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+    }
+
+    /// `--codepage` as 4.2 takes it: strtol base 10, the whole argument; the
+    /// first one given decides, and a later one need only be a number.
+    #[test]
+    fn codepage_is_read_as_mkfs_fat_reads_it() {
+        assert_eq!(cps(&[]).unwrap(), Codepage::Cp850);
+        assert_eq!(cps(&["437"]).unwrap(), Codepage::Cp437);
+        assert_eq!(cps(&["+866"]).unwrap(), Codepage::Cp866);
+        assert_eq!(cps(&["0852"]).unwrap(), Codepage::Cp852);
+        assert_eq!(cps(&["437", "9999"]).unwrap(), Codepage::Cp437);
+        for bad in ["", " 437", "437 ", "0x1b5", "-5", "abc", "+", "99999999999", "2147483648"] {
+            let e = cps(&[bad]).unwrap_err().to_string();
+            assert_eq!(e, format!("Invalid codepage : {bad}"));
+        }
+        assert!(cps(&["437", "x"]).unwrap_err().to_string().starts_with("Invalid codepage"));
+        for unsupported in ["9999", "1252", "-0", "0"] {
+            let e = cps(&[unsupported]).unwrap_err().to_string();
+            assert!(e.starts_with("Cannot initialize codepage"), "{e}");
+        }
+        assert!(cps(&["9999", "437"]).is_err());
+    }
 
     // Finding 8a2452f8f3a5: -M 0x1f8 and -D 0x180 are refused, not written
     // as 0xf8 and 0x80.

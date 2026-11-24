@@ -8,6 +8,7 @@
 //! specification.
 
 use crate::error::{Error, Result};
+use crate::codepage::Codepage;
 
 /// The width of a FAT entry, which is the only thing that distinguishes the
 /// three filesystems.
@@ -310,6 +311,12 @@ pub struct Params {
     /// the Atari variant's enlarged logical sectors, where 4.2 would write past
     /// the end of the device (see [`crate::Geometry::compute`]).
     pub offset: u64,
+    /// `--codepage N`: the DOS code page the label is given in — 850, as in
+    /// `mkfs.fat`, unless set. With `mkfs.fat 4.2` it changes no byte of the
+    /// filesystem: every non-ASCII label is refused (see [`crate::codepage`]
+    /// and [`encode_label_in`]), and an ASCII label is the same bytes in all
+    /// four. It decides which of 4.2's refusals a non-ASCII label gets.
+    pub codepage: Codepage,
 }
 
 impl Params {
@@ -486,7 +493,7 @@ impl Params {
     pub fn resolved_label(&self) -> Result<[u8; 11]> {
         match &self.label {
             None => Ok(*NO_NAME),
-            Some(label) => encode_label(label),
+            Some(label) => encode_label_in(label, self.codepage),
         }
     }
 }
@@ -500,41 +507,58 @@ pub(crate) fn clock_id() -> u32 {
     }
 }
 
-/// Validate a volume label and lay it out as eleven space-padded bytes.
-///
-/// The rules are `validate_volume_label()` in dosfstools' `common.c`. Lowercase
-/// is allowed but warned about there, because DOS uppercases what it reads and
-/// the label then no longer matches what was written; here it is allowed
-/// silently, since the label is stored as given and read back as given.
+/// Validate a volume label in the default code page, 850, and lay it out as
+/// eleven space-padded bytes. See [`encode_label_in`].
 pub fn encode_label(label: &str) -> Result<[u8; 11]> {
+    encode_label_in(label, Codepage::default())
+}
+
+/// Validate a volume label given in `codepage` and lay it out as eleven
+/// space-padded bytes.
+///
+/// The rules and their order are dosfstools 4.2's (`setup_tables()` and
+/// `validate_volume_label()` in `common.c`): at most eleven characters; then
+/// the conversion into the code page, where a character the code page lacks
+/// is `Error when processing label`; then the bytes, where one below 0x20,
+/// one of `*?.,;:/\|+=<>[]"`, or a leading space is refused. 4.2 tests the
+/// bytes as a signed `char`, so a byte from 0x80 up — any non-ASCII character
+/// the code page *has* — also counts as below 0x20, and that is kept: a label
+/// is ASCII or it is refused, and the bytes written are the same in every
+/// code page. Lowercase is allowed but warned about there, because DOS
+/// uppercases what it reads; here it is allowed silently, since the label is
+/// stored as given and read back as given.
+pub fn encode_label_in(label: &str, codepage: Codepage) -> Result<[u8; 11]> {
     if label.chars().count() > 11 {
         return Err(Error::InvalidLabel(format!(
             "'{label}' is {} characters; the field holds 11",
             label.chars().count()
         )));
     }
-    if !label.is_ascii() {
+    // iconv stops at the first character it cannot convert and names the
+    // first byte of its UTF-8 sequence.
+    if let Some(c) = label.chars().find(|&c| codepage.encode(c).is_none()) {
+        let mut utf8 = [0u8; 4];
+        let first = c.encode_utf8(&mut utf8).as_bytes()[0];
         return Err(Error::InvalidLabel(format!(
-            "'{label}' is not ASCII; labels outside ASCII need a DOS code page, which this crate does not carry"
+            "Error when processing label: Cannot convert input sequence '\\x{first:02X}' \
+             from codeset 'UTF-8' to 'CP{}': Invalid or incomplete multibyte or wide character",
+            codepage.number()
+        )));
+    }
+    if label.chars().any(|c| (c as u32) < 0x20 || !c.is_ascii()) {
+        return Err(Error::InvalidLabel(
+            "Labels with characters below 0x20 are not allowed".into(),
+        ));
+    }
+    if let Some(c) = label.chars().find(|&c| "*?.,;:/\\|+=<>[]\"".contains(c)) {
+        return Err(Error::InvalidLabel(format!(
+            "'{c}' is not allowed in a label"
         )));
     }
     if label.starts_with(' ') {
         return Err(Error::InvalidLabel(
             "a label cannot start with a space".into(),
         ));
-    }
-    for c in label.chars() {
-        if (c as u32) < 0x20 {
-            return Err(Error::InvalidLabel(format!(
-                "control character {:#04x} is not allowed in a label",
-                c as u32
-            )));
-        }
-        if "*?.,;:/\\|+=<>[]\"".contains(c) {
-            return Err(Error::InvalidLabel(format!(
-                "'{c}' is not allowed in a label"
-            )));
-        }
     }
 
     let mut out = [b' '; 11];
@@ -568,6 +592,44 @@ mod tests {
         assert!(encode_label(" LEADING").is_err());
         assert!(encode_label("HAS.DOT").is_err());
         assert!(encode_label("SLASH/ES").is_err());
+    }
+
+    fn label_err(label: &str, cp: Codepage) -> String {
+        match encode_label_in(label, cp) {
+            Err(Error::InvalidLabel(m)) => m,
+            other => panic!("{label:?} in CP{}: {other:?}", cp.number()),
+        }
+    }
+
+    /// What dosfstools 4.2 says to a non-ASCII label: one the code page has
+    /// is "below 0x20" (its signed-char test), one it lacks cannot be
+    /// converted — and conversion comes before every other check.
+    #[test]
+    fn non_ascii_labels_are_refused_as_4_2_refuses_them() {
+        const BELOW: &str = "Labels with characters below 0x20 are not allowed";
+        for cp in [Codepage::Cp437, Codepage::Cp850, Codepage::Cp852] {
+            assert_eq!(label_err("ÄBC", cp), BELOW);
+            assert_eq!(label_err("äbc", cp), BELOW);
+            assert_eq!(label_err("Ä*", cp), BELOW);
+        }
+        assert_eq!(label_err("Ж", Codepage::Cp866), BELOW);
+        assert_eq!(label_err("A\tB", Codepage::Cp850), BELOW);
+        let e = label_err("Ж", Codepage::Cp850);
+        assert!(e.starts_with("Error when processing label"), "{e}");
+        assert!(e.contains("'\\xD0'") && e.contains("'CP850'"), "{e}");
+        let e = label_err("A.€", Codepage::Cp437);
+        assert!(e.contains("'\\xE2'") && e.contains("'CP437'"), "{e}");
+        assert!(label_err("ÄÄÄÄÄÄÄÄÄÄÄÄ", Codepage::Cp850).contains("12 characters"));
+    }
+
+    #[test]
+    fn ascii_labels_are_the_same_bytes_in_every_codepage() {
+        for cp in Codepage::ALL {
+            assert_eq!(&encode_label_in("ESP", cp).unwrap(), b"ESP        ");
+            let p = Params { label: Some("EFI".into()), codepage: cp, ..Params::new() };
+            assert_eq!(&p.resolved_label().unwrap(), b"EFI        ");
+        }
+        assert_eq!(Params::new().codepage, Codepage::Cp850);
     }
 
     #[test]

@@ -145,6 +145,19 @@ done
 )
 echo "checked -C --offset against fat16-17m-off2048"
 
+# --codepage (#11): 4.2 refuses every non-ASCII label, so an ASCII label is
+# the same bytes in every code page — the -n TESTLABEL golden, byte for byte.
+for cp in 437 850 852 866; do
+    (
+        cd "$W"
+        truncate -s $((65536 * 1024)) cp.img
+        mkfs.fat --invariant --codepage "$cp" -n TESTLABEL cp.img > /dev/null
+        gzip -dc fat16-64m-label.img.gz | cmp - cp.img
+        rm cp.img
+    )
+    echo "checked --codepage $cp against fat16-64m-label"
+done
+
 # -c (#7): on an image file every block reads, so `mkfs.fat -c` writes the
 # plain golden — the reference for `mkfs-fat -c` (tests/cli_badblocks.rs).
 (
@@ -229,6 +242,35 @@ echo "checked -c against fat12-1440k"
         done
         rm -f fsck.img
     } > offset-probes.log
+    # --codepage (#11): what 4.2 says to a non-ASCII label in each code page,
+    # to a code page iconv lacks, and to one that is not a number; whether it
+    # wrote anything (cmp against an untouched file). In a UTF-8 locale, as
+    # mkfs.fat converts from the locale's codeset.
+    cprobe() {   # cprobe NAME MKFS-ARGS...
+        local name=$1; shift
+        truncate -s $((16384 * 1024)) "$name.img"
+        echo "== $name: mkfs.fat $*"
+        set +e
+        LC_ALL=C.UTF-8 mkfs.fat --invariant "$@" "$name.img" 2>&1 | grep -v '^  \|^Usage\|^Create FAT\|^up to BLOCKS\|^created with\|^Options:\|^Report bugs\|^$'
+        echo "exit ${PIPESTATUS[0]} $(cmp -s "$name.img" <(head -c $((16384 * 1024)) /dev/zero) && echo untouched || echo written)"
+        set -e
+        rm -f "$name.img"
+    }
+    {
+        cprobe cp437-upper -n ÄBC --codepage 437
+        cprobe cp850-lower -n äbc --codepage 850
+        cprobe default-upper -n ÄBC
+        cprobe cp852 -n ŁÓDŹ --codepage 852
+        cprobe cp866 -n Ж --codepage 866
+        cprobe default-cyrillic -n Ж
+        cprobe cp866-latin -n ÄBC --codepage 866
+        cprobe unknown --codepage 9999
+        cprobe unknown-first --codepage 9999 --codepage 437
+        cprobe known-first --codepage 437 --codepage 9999 -n TESTLABEL
+        cprobe word --codepage abc
+        cprobe negative --codepage -5
+    } > codepage-probes.log
+    cat codepage-probes.log
     cat offset-probes.log
     rm -f ./*.list before.img behind.img minus-*.img hex.img word.img two.img \
         range.img empty.img nul.img fat32-*.img

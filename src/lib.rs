@@ -62,6 +62,7 @@
 
 pub mod badblocks;
 pub mod bytes;
+pub mod codepage;
 pub mod device;
 pub mod error;
 pub mod fat;
@@ -73,6 +74,7 @@ pub mod params;
 pub mod structs;
 
 // The things a caller reaches for first, so a simple use looks simple.
+pub use codepage::Codepage;
 pub use device::{BlockDevice, FileDevice, MemDevice, OffsetDevice};
 pub use error::{Error, Result};
 pub use format::{format, Report};
